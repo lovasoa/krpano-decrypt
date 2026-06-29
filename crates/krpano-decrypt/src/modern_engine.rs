@@ -19,13 +19,15 @@ use base64::{Engine as _, engine::general_purpose};
 use crate::error::{KrpanoDecryptError, ModernWrapperKeyError};
 use crate::old_engine::{EngineContext, KeyDerivation};
 
+pub(crate) const SUBDIV_REPLACEMENT_TOKEN: &str = "z";
+
 /// Context extracted from a modern krpano engine.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModernEngineContext {
     /// Default byte-helper key (resolves to "actions overflow" in all observed
     /// modern engines).
     pub default_key: String,
-    /// Token that the Subdiv cipher replaces with backslash (resolves to "z").
+    /// Token that the Subdiv cipher replaces with backslash.
     pub replacement_token: String,
     /// The constant "KENC" used for header matching.
     pub kenc_constant: String,
@@ -99,7 +101,7 @@ pub fn extract_modern_context(
         find_row_by_value(&rows, "actions overflow").ok_or(KrpanoDecryptError::MissingKey)?;
     log::debug!("extract_modern_context: default_key={default_key:?}");
 
-    let replacement_token = find_row_by_value(&rows, "z").unwrap_or_else(|| "z".to_string());
+    let replacement_token = SUBDIV_REPLACEMENT_TOKEN.to_string();
     log::debug!("extract_modern_context: replacement_token={replacement_token:?}");
 
     Ok(ModernEngineContext {
@@ -110,6 +112,17 @@ pub fn extract_modern_context(
         side,
         rows,
     })
+}
+
+pub(crate) fn public_subdiv_context() -> ModernEngineContext {
+    ModernEngineContext {
+        default_key: "actions overflow".to_string(),
+        replacement_token: SUBDIV_REPLACEMENT_TOKEN.to_string(),
+        kenc_constant: "KENC".to_string(),
+        checksum_constant: 0,
+        side: Vec::new(),
+        rows: vec!["krpano".bytes().map(u16::from).collect()],
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -504,7 +517,7 @@ fn find_row_by_value(rows: &[Vec<u16>], target: &str) -> Option<String> {
 
 /// Decode the modern `P/P` and 2023-style `R/R` XML body.
 ///
-/// krpano first replaces the configured token (`z` in current fixtures) with
+/// krpano first replaces literal `z` bytes with
 /// `\`, then sends the result to `we.subdiv` branch 5 via the XML parser
 /// (`_(9493, body, 1)`).  `R/R` bodies additionally read the `pk=` protection
 /// record from the wrapper-key side data through the branch-12 trie.
@@ -972,8 +985,7 @@ fn find_row_json_by_value(rows: &HashMap<String, String>, target: &str) -> Optio
 pub fn parse_rows_json(json: &str) -> Option<ModernEngineContext> {
     let data: RowsJson = serde_json::from_str(json).ok()?;
     let default_key = find_row_json_by_value(&data.rows, "actions overflow")?;
-    let replacement_token =
-        find_row_json_by_value(&data.rows, "z").unwrap_or_else(|| "z".to_string());
+    let replacement_token = SUBDIV_REPLACEMENT_TOKEN.to_string();
     Some(ModernEngineContext {
         default_key,
         replacement_token,

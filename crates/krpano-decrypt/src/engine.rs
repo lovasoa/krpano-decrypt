@@ -256,6 +256,10 @@ fn decrypt_xml_without_viewer(
                 false,
             )?
         }
+        (BodyCipher::Subdiv, CipherMode::Public) => {
+            let ctx = modern_engine::public_subdiv_context();
+            modern_engine::pp_rr_branch_to_plaintext(body, &ctx)?.into_bytes()
+        }
         _ => return Err(viewer_js_required(cipher, mode)),
     };
 
@@ -949,6 +953,17 @@ mod tests {
             looks_like_krpano_xml(text),
             "plaintext should start with <krpano>"
         );
+    }
+
+    #[test]
+    fn decrypt_xml_public_subdiv_without_viewer_js() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/encrypted/2026-06-25-pp-01_minimal");
+        let xml = fs::read(root.join("tour.xml")).unwrap();
+        let expected = fs::read(root.join("plaintext.xml")).unwrap();
+
+        let plaintext = decrypt_xml(&xml, None).unwrap();
+        assert_eq!(plaintext, expected);
     }
 
     #[test]
