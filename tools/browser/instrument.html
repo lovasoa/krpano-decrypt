@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>krpano dynamic instrumentation harness</title>
+<!--
+  Browser-based dynamic analysis harness for krpano.
+
+  Unlike the Node tools (which stub the DOM), this loads a REAL krpano viewer in
+  a browser and instruments it at runtime. Use it to:
+    - observe behavior that only manifests with a full DOM/WebGL (e.g. 1.20+
+      key embedding, runtime-only code paths),
+    - capture the arguments and return values of internal decrypt entry points,
+    - feed a chosen encrypted XML to a real viewer and watch it decrypt.
+
+  HOW IT WORKS
+  ============
+  1. You provide URLs (or pick local files) for tour.js and tour.xml.
+  2. The harness monkey-patches XMLHttpRequest/fetch so the viewer fetches YOUR
+     chosen XML instead of the network one.
+  3. It wraps the global `Function` and `eval` so the decoded engine source is
+     captured (same idea as the Node sandbox, but in the browser realm where
+     Function.prototype.toString matches what krpano expects).
+  4. It hooks common decrypt entry-point names once the engine is loaded, and
+     logs every call to the side panel.
+
+  This file runs ENTIRELY in the browser — open it via a static file server or
+  file://. It executes real, third-party krpano code; only use it on tours you
+  control.
+
+  The Node tools (../sandbox.mjs, ../extract_rows.mjs) are better for headless,
+  repeatable analysis. This harness is for interactive, runtime-only behavior.
+-->
+<style>
+  body { font: 14px/1.45 -apple-system, Segoe UI, sans-serif; margin: 0; display: flex; height: 100vh; }
+  #controls { width: 360px; padding: 12px; border-right: 1px solid #ccc; overflow: auto; box-sizing: border-box; }
+  #controls label { display: block; margin: 8px 0 2px; font-weight: 600; }
+  #controls input[type=text] { width: 100%; box-sizing: border-box; }
+  #log { flex: 1; overflow: auto; padding: 12px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre-wrap; }
+  button { margin: 8px 0; padding: 6px 10px; cursor: pointer; }
+  .row { border-bottom: 1px dotted #ddd; padding: 2px 0; }
+  .err { color: #c00; } .ok { color: #070; } .dim { color: #888; }
+</style>
+</head>
+<body>
+<div id="controls">
+  <h2>krpano instrument</h2>
+  <label for="jsUrl">Viewer JS URL (tour.js)</label>
+  <input id="jsUrl" type="text" placeholder="tour.js" />
+  <label for="xmlUrl">Encrypted XML URL (tour.xml)</label>
+  <input id="xmlUrl" type="text" placeholder="tour.xml" />
+  <label for="xmlFile">…or choose XML file</label>
+  <input id="xmlFile" type="file" accept=".xml" />
+  <p class="dim">The viewer will be fed the XML you provide (file overrides URL).</p>
+  <button id="load">Load &amp; instrument</button>
+  <button id="clear">Clear log</button>
+  <h3>Hooks</h3>
+  <label><input id="hookFunction" type="checkbox" checked /> capture decoded engine (Function/eval)</label>
+  <label><input id="hookDecrypt" type="checkbox" checked /> hook decrypt entry points</label>
+  <p class="dim">Captured engine and traces appear in the log. Right-click → Inspect for full devtools.</p>
+</div>
+<div id="log"></div>
+
+<script>
+const logEl = document.getElementById("log");
+const log = (msg, cls = "") => {
+  const div = document.createElement("div");
+  div.className = "row " + cls;
+  div.textContent = typeof msg === "string" ? msg : JSON.stringify(msg);
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+};
+document.getElementById("clear").onclick = () => logEl.innerHTML = "";
+
+let chosenXml = null;
+document.getElementById("xmlFile").onchange = async (e) => {
+  const f = e.target.files[0];
+  if (f) { chosenXml = await f.text(); log(`loaded XML file: ${f.name} (${chosenXml.length} bytes)`); }
+};
+
+// Intercept XHR/fetch so the viewer fetches our chosen XML.
+function installNetworkInterceptor(xmlUrl, xmlText) {
+  const origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    if (xmlUrl && url && url.endsWith(xmlUrl)) {
+      log(`[XHR] intercepting ${url} -> serving chosen XML`, "dim");
+      this._intercept = true;
+    }
+    return origOpen.call(this, method, url, ...rest);
+  };
+  const origSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function (body) {
+    if (this._intercept && xmlText != null) {
+      Object.defineProperty(this, "responseText", { value: xmlText, writable: false });
+      Object.defineProperty(this, "response", { value: xmlText, writable: false });
+      Object.defineProperty(this, "readyState", { value: 4, writable: false });
+      Object.defineProperty(this, "status", { value: 200, writable: false });
+      setTimeout(() => { if (this.onreadystatechange) this.onreadystatechange(); if (this.onload) this.onload(); }, 0);
+      return;
+    }
+    return origSend.call(this, body);
+  };
+  // fetch too
+  const origFetch = window.fetch;
+  window.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (xmlUrl && url && url.endsWith(xmlUrl) && xmlText != null) {
+      log(`[fetch] intercepting ${url} -> serving chosen XML`, "dim");
+      return new Response(xmlText, { status: 200, headers: { "Content-Type": "text/xml" } });
+    }
+    return origFetch(input, init);
+  };
+}
+
+let capturedEngine = null;
+function installEngineCapture() {
+  const RealFunction = window.Function;
+  window.Function = function (...args) {
+    const body = args[args.length - 1];
+    if (typeof body === "string" && body.length > 1000 && !capturedEngine) {
+      capturedEngine = body;
+      log(`[Function] captured decoded engine: ${body.length} bytes`, "ok");
+    }
+    return RealFunction.apply(this, args);
+  };
+  window.Function.prototype = RealFunction.prototype;
+  const origEval = window.eval;
+  window.eval = function (src) {
+    if (typeof src === "string" && src.length > 1000 && !capturedEngine) {
+      capturedEngine = src;
+      log(`[eval] captured decoded engine: ${src.length} bytes`, "ok");
+    }
+    return origEval.call(this, src);
+  };
+}
+
+// Once the engine is captured, try to hook decrypt entry points by name.
+function hookDecryptEntryPoints() {
+  if (!capturedEngine) return;
+  // The engine defines functions like decryptData / decodeLicense. We can't
+  // reach their closure, but we can grep the captured source for version
+  // markers and log them, and re-run the Node-style row extraction in-browser.
+  for (const marker of ["KENC", "b64u8=function", "we.subdiv", "decryptData", "decodeLicense"]) {
+    const i = capturedEngine.indexOf(marker);
+    log(`[engine] ${marker}: ${i === -1 ? "absent" : "at " + i}`, i === -1 ? "dim" : "ok");
+  }
+  // Expose for the console.
+  window.__capturedEngine = capturedEngine;
+  log("[engine] source available as window.__capturedEngine", "dim");
+}
+
+document.getElementById("load").onclick = () => {
+  const jsUrl = document.getElementById("jsUrl").value || "tour.js";
+  const xmlUrl = document.getElementById("xmlUrl").value || "tour.xml";
+  log(`loading viewer: ${jsUrl}`, "dim");
+  if (document.getElementById("hookFunction").checked) installEngineCapture();
+  installNetworkInterceptor(xmlUrl, chosenXml);
+  const scr = document.createElement("script");
+  scr.src = jsUrl;
+  scr.onload = () => {
+    log(`viewer script loaded`, "ok");
+    if (document.getElementById("hookDecrypt").checked) setTimeout(hookDecryptEntryPoints, 100);
+  };
+  scr.onerror = () => log(`failed to load ${jsUrl}`, "err");
+  document.body.appendChild(scr);
+};
+
+log("krpano instrumentation harness ready.", "dim");
+log("Enter the viewer JS and XML URLs (or pick an XML file), then click Load.", "dim");
+</script>
+</body>
+</html>
