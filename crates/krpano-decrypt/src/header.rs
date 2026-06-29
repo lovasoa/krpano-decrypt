@@ -7,10 +7,10 @@ use crate::error::KrpanoDecryptError;
 /// How the encrypted body is encoded and decrypted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BodyCipher {
-    /// Modified Base85 → RC4 byte-decrypt → LZ4 decompress → UTF-8.
+    /// Modified Base85 → RC4 byte-decrypt → LZ4 decompress.
     /// Used by headers with byte 6 = `Z` (charCode − 80 = 10).
     ClassicZ,
-    /// Standard Base64 → RC4 byte-decrypt → UTF-8.
+    /// Standard Base64 → RC4 byte-decrypt.
     /// Used by headers with byte 6 = `B` (charCode − 80 = −14).
     ClassicB,
     /// Token replacement (`z`→`\`) → `we.subdiv` branch 5 decompress.
@@ -56,22 +56,22 @@ impl KencHeader {
     /// `k = (r << 4) + (r << 2)` where `r = 4` in the modern engine.
     const K: u32 = 80;
 
-    pub fn parse(payload: &str) -> Result<Self, KrpanoDecryptError> {
+    pub fn parse(payload: &[u8]) -> Result<Self, KrpanoDecryptError> {
         let header = payload
             .get(..Self::LEN)
             .ok_or(KrpanoDecryptError::HeaderTooShort { len: payload.len() })?;
-        if !header.starts_with("KENC") {
+        if !header.starts_with(b"KENC") {
             return Err(KrpanoDecryptError::InvalidHeader {
-                header: header.to_string(),
+                header: String::from_utf8_lossy(header).into_owned(),
             });
         }
 
-        let raw = header.to_string();
-        let chars: Vec<char> = raw.chars().skip(4).collect();
-        let (mode_char, enc_char, src_char, flags_char) = (chars[0], chars[1], chars[2], chars[3]);
+        let raw = String::from_utf8_lossy(header).into_owned();
+        let (mode_byte, enc_byte, src_byte, flags_byte) =
+            (header[4], header[5], header[6], header[7]);
 
-        let byte6_value = (src_char as u32).wrapping_sub(Self::K) as i32;
-        let mode_value = ((mode_char as u32).wrapping_sub(Self::K) >> 1) as i32;
+        let byte6_value = u32::from(src_byte).wrapping_sub(Self::K) as i32;
+        let mode_value = (u32::from(mode_byte).wrapping_sub(Self::K) >> 1) as i32;
 
         let cipher = match byte6_value {
             10 => BodyCipher::ClassicZ,
@@ -90,13 +90,13 @@ impl KencHeader {
             raw,
             cipher,
             mode,
-            encoding: enc_char,
-            flags: flags_char,
+            encoding: char::from(enc_byte),
+            flags: char::from(flags_byte),
         })
     }
 
     /// Return the payload bytes after the header.
-    pub fn payload<'a>(&self, payload: &'a str) -> &'a str {
+    pub fn payload<'a>(&self, payload: &'a [u8]) -> &'a [u8] {
         &payload[Self::LEN..]
     }
 }
@@ -111,14 +111,14 @@ mod tests {
 
     #[test]
     fn parses_known_kenc_headers() {
-        let public_z = KencHeader::parse("KENCPUZRpayload").unwrap();
-        assert_eq!(public_z.payload("KENCPUZRpayload"), "payload");
+        let public_z = KencHeader::parse(b"KENCPUZRpayload").unwrap();
+        assert_eq!(public_z.payload(b"KENCPUZRpayload"), b"payload");
         assert_eq!(public_z.cipher, BodyCipher::ClassicZ);
         assert_eq!(public_z.mode, CipherMode::Public);
         assert_eq!(public_z.encoding, 'U');
         assert_eq!(public_z.flags, 'R');
 
-        let protected_subdiv = KencHeader::parse("KENCRURRpayload").unwrap();
+        let protected_subdiv = KencHeader::parse(b"KENCRURRpayload").unwrap();
         assert_eq!(protected_subdiv.cipher, BodyCipher::Subdiv);
         assert_eq!(protected_subdiv.mode, CipherMode::Protected);
     }
@@ -126,27 +126,27 @@ mod tests {
     #[test]
     fn classifies_all_observed_headers() {
         // Old Z: KENCRUZR → ClassicZ + Protected
-        let h = KencHeader::parse("KENCRUZR....").unwrap();
+        let h = KencHeader::parse(b"KENCRUZR....").unwrap();
         assert_eq!(h.cipher, BodyCipher::ClassicZ);
         assert_eq!(h.mode, CipherMode::Protected);
 
         // Modern Z: KENCPUZR → ClassicZ + Public
-        let h = KencHeader::parse("KENCPUZR....").unwrap();
+        let h = KencHeader::parse(b"KENCPUZR....").unwrap();
         assert_eq!(h.cipher, BodyCipher::ClassicZ);
         assert_eq!(h.mode, CipherMode::Public);
 
         // Protected subdiv: KENCRURR → Subdiv + Protected
-        let h = KencHeader::parse("KENCRURR....").unwrap();
+        let h = KencHeader::parse(b"KENCRURR....").unwrap();
         assert_eq!(h.cipher, BodyCipher::Subdiv);
         assert_eq!(h.mode, CipherMode::Protected);
 
         // Public subdiv: KENCPUPR → Subdiv + Public
-        let h = KencHeader::parse("KENCPUPR....").unwrap();
+        let h = KencHeader::parse(b"KENCPUPR....").unwrap();
         assert_eq!(h.cipher, BodyCipher::Subdiv);
         assert_eq!(h.mode, CipherMode::Public);
 
         // Classic B: KENCPUBR → ClassicB + Public
-        let h = KencHeader::parse("KENCPUBR....").unwrap();
+        let h = KencHeader::parse(b"KENCPUBR....").unwrap();
         assert_eq!(h.cipher, BodyCipher::ClassicB);
         assert_eq!(h.mode, CipherMode::Public);
     }
@@ -154,16 +154,16 @@ mod tests {
     #[test]
     fn rejects_invalid_kenc_headers() {
         assert!(matches!(
-            KencHeader::parse("short"),
+            KencHeader::parse(b"short"),
             Err(KrpanoDecryptError::HeaderTooShort { len: 5 })
         ));
         assert!(matches!(
-            KencHeader::parse("NOTKENC!payload"),
+            KencHeader::parse(b"NOTKENC!payload"),
             Err(KrpanoDecryptError::InvalidHeader { .. })
         ));
         // Unknown byte 6 value
         assert!(matches!(
-            KencHeader::parse("KENCXXXR...."),
+            KencHeader::parse(b"KENCXXXR...."),
             Err(KrpanoDecryptError::InvalidHeader { .. })
         ));
     }

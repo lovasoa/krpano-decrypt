@@ -6,6 +6,44 @@
 
 use thiserror::Error;
 
+/// Structured failures from the modern `krp:`/`ptp:` wrapper unpacker.
+#[derive(Debug, Error, Eq, PartialEq)]
+#[allow(missing_docs)]
+pub enum ModernWrapperKeyError {
+    #[error("startup IIFE has no opening brace")]
+    MissingOpeningBrace,
+
+    #[error("startup IIFE has no closing brace")]
+    MissingClosingBrace,
+
+    #[error("startup IIFE body has invalid brace order")]
+    InvalidBraceOrder,
+
+    #[error(
+        "invalid startup arithmetic for checksum constant {startup_constant}: modulo base is zero"
+    )]
+    ZeroModuloBase { startup_constant: u32 },
+
+    #[error(
+        "wrapper key is too short for startup parameters: need byte index {needed_index}, length {key_len}"
+    )]
+    ShortStartupParameter { needed_index: usize, key_len: usize },
+
+    #[error("startup browser-marker index {index} is outside the {len}-byte browser marker")]
+    BrowserMarkerIndexOutOfRange { index: usize, len: usize },
+
+    #[error("startup shuffle index {index} is outside the {len}-entry shuffle table")]
+    ShuffleIndexOutOfRange { index: usize, len: usize },
+
+    #[error(
+        "wrapper key is too short for checksum tail: need byte index {needed_index}, length {key_len}"
+    )]
+    ShortChecksumTail { needed_index: usize, key_len: usize },
+
+    #[error("wrapper key checksum mismatch: got {got}, expected {expected}")]
+    ChecksumMismatch { got: i32, expected: i32 },
+}
+
 /// All errors produced by the krpano decryption pipeline.
 #[derive(Debug, Error)]
 #[allow(missing_docs)]
@@ -46,6 +84,9 @@ pub enum KrpanoDecryptError {
 
     #[error("decrypted krpano payload is not valid UTF-8")]
     InvalidUtf8,
+
+    #[error("modern krpano wrapper key could not be unpacked: {0}")]
+    InvalidModernWrapperKey(ModernWrapperKeyError),
 
     #[error("ClassicB Base64 alphabet has only {len} characters, must be >= 65")]
     ClassicBAlphabetTooShort { len: usize },

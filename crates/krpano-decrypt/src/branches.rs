@@ -45,7 +45,7 @@ impl<'a> SubdivBodyPrefix<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Z branch (ClassicZ cipher) — Modified Base85 → RC4 → LZ4 → UTF-8
+// Z branch (ClassicZ cipher) — Modified Base85 → RC4 → LZ4
 // ---------------------------------------------------------------------------
 
 /// Decrypt a ClassicZ-cipher encrypted body into raw bytes.
@@ -58,7 +58,7 @@ impl<'a> SubdivBodyPrefix<'a> {
 /// The LZ4 block carries an 8-byte header: 3-byte LE decompressed length,
 /// then at offset 4 a 3-byte LE compressed length.
 pub fn decrypt_z_branch(
-    body: &str,
+    body: &[u8],
     key: &[u8],
     widened: bool,
 ) -> Result<Vec<u8>, KrpanoDecryptError> {
@@ -85,29 +85,27 @@ pub fn decrypt_z_branch(
     )
 }
 
-/// Decrypt a ClassicZ-cipher body into a UTF-8 plaintext string.
+/// Decrypt a ClassicZ-cipher body into plaintext bytes.
 pub fn z_branch_to_plaintext(
-    body: &str,
+    body: &[u8],
     key: &[u8],
     widened: bool,
-) -> Result<String, KrpanoDecryptError> {
-    let decrypted = decrypt_z_branch(body, key, widened)?;
-    String::from_utf8(decrypted).map_err(|_| KrpanoDecryptError::InvalidUtf8)
+) -> Result<Vec<u8>, KrpanoDecryptError> {
+    decrypt_z_branch(body, key, widened)
 }
 
 // ---------------------------------------------------------------------------
-// B branch (ClassicB cipher) — Base64 → RC4 → UTF-8
+// B branch (ClassicB cipher) — Base64 → RC4
 // ---------------------------------------------------------------------------
 
 pub fn b_branch_to_plaintext_with_alphabet(
-    body: &str,
-    alphabet: &str,
+    body: &[u8],
+    alphabet: &[u8],
     key: &[u8],
     widened: bool,
-) -> Result<String, KrpanoDecryptError> {
+) -> Result<Vec<u8>, KrpanoDecryptError> {
     let decoded = decode_custom_base64(body, alphabet)?;
-    let decrypted = crypto::decrypt_bytes(&decoded, key, widened)?;
-    String::from_utf8(decrypted).map_err(|_| KrpanoDecryptError::InvalidUtf8)
+    crypto::decrypt_bytes(&decoded, key, widened)
 }
 
 // ---------------------------------------------------------------------------
@@ -118,12 +116,13 @@ pub fn b_branch_to_plaintext_with_alphabet(
 /// Only used as regression coverage; the real subdiv path is branch 5.
 #[allow(dead_code)]
 pub(crate) fn decrypt_subdiv_via_classic_pipeline(
-    body: &str,
+    body: &[u8],
     key: &[u8],
 ) -> Result<String, KrpanoDecryptError> {
-    let replaced = body.replace('z', "\\");
-    let prefix = parse_subdiv_body_prefix(&replaced);
-    let decoded = codecs::decode_modified_base85(prefix.payload)?;
+    let replaced = replace_byte(body, b'z', b'\\');
+    let replaced = std::str::from_utf8(&replaced).map_err(|_| KrpanoDecryptError::InvalidUtf8)?;
+    let prefix = parse_subdiv_body_prefix(replaced);
+    let decoded = codecs::decode_modified_base85(prefix.payload.as_bytes())?;
     let decrypted = crypto::decrypt_bytes(&decoded, key, true)?;
 
     if decrypted.len() < codecs::PACKED_VIEWER_HEADER_LEN {
@@ -151,39 +150,38 @@ pub(crate) fn decrypt_subdiv_via_classic_pipeline(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn decode_custom_base64(input: &str, alphabet: &str) -> Result<Vec<u8>, KrpanoDecryptError> {
-    let alphabet: Vec<char> = alphabet.chars().collect();
+fn decode_custom_base64(input: &[u8], alphabet: &[u8]) -> Result<Vec<u8>, KrpanoDecryptError> {
     if alphabet.len() < 65 {
         return Err(KrpanoDecryptError::ClassicBAlphabetTooShort {
             len: alphabet.len(),
         });
     }
     let mut out = Vec::with_capacity(input.len() / 4 * 3);
-    let mut chars = input.chars();
+    let mut chars = input.iter().copied();
     while let (Some(a), Some(b), Some(c), Some(d)) =
         (chars.next(), chars.next(), chars.next(), chars.next())
     {
         let a = alphabet.iter().position(|&ch| ch == a).ok_or(
             KrpanoDecryptError::ClassicBCharNotFound {
-                ch: a,
+                ch: char::from(a),
                 alphabet_len: alphabet.len(),
             },
         )?;
         let b = alphabet.iter().position(|&ch| ch == b).ok_or(
             KrpanoDecryptError::ClassicBCharNotFound {
-                ch: b,
+                ch: char::from(b),
                 alphabet_len: alphabet.len(),
             },
         )?;
         let c = alphabet.iter().position(|&ch| ch == c).ok_or(
             KrpanoDecryptError::ClassicBCharNotFound {
-                ch: c,
+                ch: char::from(c),
                 alphabet_len: alphabet.len(),
             },
         )?;
         let d = alphabet.iter().position(|&ch| ch == d).ok_or(
             KrpanoDecryptError::ClassicBCharNotFound {
-                ch: d,
+                ch: char::from(d),
                 alphabet_len: alphabet.len(),
             },
         )?;
@@ -202,17 +200,25 @@ fn read_u24_le(input: &[u8]) -> usize {
     usize::from(input[0]) | (usize::from(input[1]) << 8) | (usize::from(input[2]) << 16)
 }
 
+fn replace_byte(input: &[u8], from: u8, to: u8) -> Vec<u8> {
+    input
+        .iter()
+        .map(|&byte| if byte == from { to } else { byte })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // 1.24 Subdiv diagnostic (Base85 → RC4 → LZ4 → UTF-8) — for 2026 fixtures
 // ---------------------------------------------------------------------------
 
 /// Diagnostic: try the Base85→RC4→LZ4 pipeline on a 2026 1.24 subdiv body.
 #[allow(dead_code)]
-pub fn diagnose_subdiv_1_24_body(body: &str, key: &[u8]) -> Result<String, KrpanoDecryptError> {
-    let replaced = body.replace('z', "\\");
+pub fn diagnose_subdiv_1_24_body(body: &[u8], key: &[u8]) -> Result<String, KrpanoDecryptError> {
+    let replaced = replace_byte(body, b'z', b'\\');
+    let replaced = std::str::from_utf8(&replaced).map_err(|_| KrpanoDecryptError::InvalidUtf8)?;
     eprintln!("  replaced body len={}", replaced.len());
 
-    let prefix = parse_subdiv_body_prefix(&replaced);
+    let prefix = parse_subdiv_body_prefix(replaced);
     eprintln!(
         "  prefix key_id={:?}, payload len={}",
         prefix.key_id,
@@ -220,7 +226,7 @@ pub fn diagnose_subdiv_1_24_body(body: &str, key: &[u8]) -> Result<String, Krpan
     );
 
     // Try BE first (matches JS inline Base85: >>> 24)
-    match codecs::decode_modified_base85(prefix.payload) {
+    match codecs::decode_modified_base85(prefix.payload.as_bytes()) {
         Ok(decoded) => {
             eprintln!("  BE Base85 decoded len={}", decoded.len());
             // Try widened RC4 first (the JS engine uses widened for Subdiv)
@@ -283,7 +289,7 @@ pub fn diagnose_subdiv_1_24_body(body: &str, key: &[u8]) -> Result<String, Krpan
     }
 
     // Try LE
-    match codecs::decode_modified_base85_little_endian(prefix.payload) {
+    match codecs::decode_modified_base85_little_endian(prefix.payload.as_bytes()) {
         Ok(decoded) => {
             eprintln!("  LE Base85 decoded len={}", decoded.len());
             match crypto::decrypt_bytes(&decoded, key, true) {
@@ -329,6 +335,15 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    fn trim_xml_start(bytes: &[u8]) -> &[u8] {
+        let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+        let start = bytes
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .unwrap_or(bytes.len());
+        &bytes[start..]
+    }
+
     #[test]
     fn subdiv_body_prefix_parses_pp_and_rr() {
         let pp = SubdivBodyPrefix::parse("%*base85payload");
@@ -350,7 +365,7 @@ mod tests {
         let body = header.payload(&payload);
 
         let plaintext = z_branch_to_plaintext(body, b"actions overflow", false).unwrap();
-        assert!(plaintext.trim_start().starts_with("<krpano"));
+        assert!(trim_xml_start(&plaintext).starts_with(b"<krpano"));
     }
 
     #[test]
@@ -379,10 +394,11 @@ mod tests {
             let key = ctx.protected_key.as_ref().unwrap();
 
             let plaintext = z_branch_to_plaintext(body, key, true).unwrap();
-            let normalized = plaintext.trim_start_matches('\u{feff}').trim_start();
+            let normalized = trim_xml_start(&plaintext);
             assert!(
-                normalized.starts_with("<krpano"),
-                "{fixture}: bad plaintext prefix: {normalized:?}"
+                normalized.starts_with(b"<krpano"),
+                "{fixture}: bad plaintext prefix: {:?}",
+                String::from_utf8_lossy(normalized)
             );
         }
     }
@@ -411,11 +427,15 @@ mod tests {
             let ctx = crate::old_engine::derive_old_license_key(&decoded, &wrapper_key).unwrap();
 
             let key = &ctx.default_key;
-            let plaintext =
-                b_branch_to_plaintext_with_alphabet(body, &ctx.base64_alphabet, key, false)
-                    .unwrap();
+            let plaintext = b_branch_to_plaintext_with_alphabet(
+                body,
+                ctx.base64_alphabet.as_bytes(),
+                key,
+                false,
+            )
+            .unwrap();
             assert!(
-                plaintext.trim_start().starts_with("<krpano"),
+                trim_xml_start(&plaintext).starts_with(b"<krpano"),
                 "{fixture}: bad plaintext prefix"
             );
         }
@@ -438,7 +458,7 @@ mod tests {
             let body = crate::header::KencHeader::parse(&payload)
                 .unwrap()
                 .payload(&payload);
-            let d = body.as_bytes();
+            let d = body;
             eprintln!(
                 "  body len={} d[0]={} d[1]={} d[2]={}",
                 body.len(),
@@ -460,7 +480,7 @@ mod tests {
             let g = i64::from(row[5]) / 3;
             eprintln!("  krpano row[5]={} g={g}", row[5]);
 
-            let replaced = body.replace(&ctx.replacement_token, "\\");
+            let replaced = replace_byte(body, ctx.replacement_token.as_bytes()[0], b'\\');
             if name.contains("pp") {
                 match modern_engine::subdiv_branch5_decode(&replaced, row, None, None) {
                     Ok(text) => eprintln!(

@@ -1,4 +1,4 @@
-use regex::Regex;
+use regex::bytes::Regex;
 use std::sync::LazyLock;
 
 use crate::codecs;
@@ -10,51 +10,50 @@ static CDATA_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?is)<!\[CDATA\[(?P<cdata>.*?)\]\]>"#).unwrap());
 
 pub fn is_encrypted_xml(contents: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(contents);
-    ENCRYPTED_RE.is_match(&text)
+    ENCRYPTED_RE.is_match(contents)
 }
 
-pub fn encrypted_payload(contents: &[u8]) -> Result<String, KrpanoDecryptError> {
-    let text = String::from_utf8_lossy(contents);
-    if !ENCRYPTED_RE.is_match(&text) {
+pub fn encrypted_payload(contents: &[u8]) -> Result<Vec<u8>, KrpanoDecryptError> {
+    if !ENCRYPTED_RE.is_match(contents) {
         return Err(KrpanoDecryptError::MissingEncryptedPayload);
     }
     let body = ENCRYPTED_RE
-        .captures(&text)
+        .captures(contents)
         .and_then(|caps| caps.name("body"))
         .ok_or(KrpanoDecryptError::MissingEncryptedPayload)?
-        .as_str();
-    let mut payload = String::new();
+        .as_bytes();
+    let mut payload = Vec::new();
     for caps in CDATA_RE.captures_iter(body) {
         if let Some(cdata) = caps.name("cdata") {
-            payload.push_str(cdata.as_str());
+            payload.extend_from_slice(cdata.as_bytes());
         }
     }
     if payload.is_empty() {
-        payload.push_str(body.trim());
+        payload.extend_from_slice(trim_ascii(body));
     }
     Ok(payload)
 }
 
 /// Known wrapper key prefixes used across krpano versions.
-const WRAPPER_KEY_PREFIXES: &[&str] = &["krp:", "ptp:"];
+const WRAPPER_KEY_PREFIXES: &[&[u8]] = &[b"krp:", b"ptp:"];
 
 pub fn extract_key_from_viewer_js(contents: &[u8]) -> Result<String, KrpanoDecryptError> {
-    let text = String::from_utf8_lossy(contents);
     log::debug!(
         "extract_key_from_viewer_js: scanning {} bytes for wrapper key",
         contents.len()
     );
     let mut candidates = 0usize;
     let mut idx = 0;
-    while let Some((literal, next_idx)) = next_js_string_literal(&text, idx) {
+    while let Some((literal, next_idx)) = next_js_string_literal(contents, idx) {
         idx = next_idx;
         candidates += 1;
         for prefix in WRAPPER_KEY_PREFIXES {
             if literal.starts_with(prefix) {
+                let literal =
+                    String::from_utf8(literal).map_err(|_| KrpanoDecryptError::InvalidUtf8)?;
                 log::debug!(
                     "extract_key_from_viewer_js: found {} key at offset {}, length {}",
-                    prefix,
+                    String::from_utf8_lossy(prefix),
                     next_idx - literal.len() - 2,
                     literal.len()
                 );
@@ -74,10 +73,9 @@ pub fn extract_decoded_viewer_js(contents: &[u8]) -> Result<Vec<u8>, KrpanoDecry
         "extract_decoded_viewer_js: scanning {} bytes for packed viewer",
         contents.len()
     );
-    let text = String::from_utf8_lossy(contents);
     let mut idx = 0;
     let mut candidates = 0u32;
-    while let Some((literal, next_idx)) = next_js_string_literal(&text, idx) {
+    while let Some((literal, next_idx)) = next_js_string_literal(contents, idx) {
         idx = next_idx;
         if !looks_like_modified_base85(&literal) {
             continue;
@@ -113,7 +111,7 @@ pub fn extract_decoded_viewer_js(contents: &[u8]) -> Result<Vec<u8>, KrpanoDecry
     Err(KrpanoDecryptError::MissingViewerJsPayload)
 }
 
-fn decode_packed_viewer_candidate(input: &str) -> Result<Vec<u8>, KrpanoDecryptError> {
+fn decode_packed_viewer_candidate(input: &[u8]) -> Result<Vec<u8>, KrpanoDecryptError> {
     match codecs::decode_packed_viewer_js_payload(input) {
         Ok(decoded) if looks_like_decoded_viewer_js(&decoded) => Ok(decoded),
         Ok(decoded) => match codecs::decode_packed_viewer_js_payload_little_endian(input) {
@@ -128,8 +126,7 @@ fn decode_packed_viewer_candidate(input: &str) -> Result<Vec<u8>, KrpanoDecryptE
     }
 }
 
-pub fn next_js_string_literal(text: &str, start: usize) -> Option<(String, usize)> {
-    let bytes = text.as_bytes();
+pub fn next_js_string_literal(bytes: &[u8], start: usize) -> Option<(Vec<u8>, usize)> {
     let mut idx = start;
     while idx < bytes.len() {
         let quote = bytes[idx];
@@ -139,7 +136,7 @@ pub fn next_js_string_literal(text: &str, start: usize) -> Option<(String, usize
         }
 
         idx += 1;
-        let mut literal = String::new();
+        let mut literal = Vec::new();
         while idx < bytes.len() {
             let byte = bytes[idx];
             if byte == quote {
@@ -156,7 +153,7 @@ pub fn next_js_string_literal(text: &str, start: usize) -> Option<(String, usize
                             return None;
                         }
                         let value = (hex_digit(bytes[idx + 1])? << 4) | hex_digit(bytes[idx + 2])?;
-                        literal.push(char::from(value));
+                        literal.push(value);
                         idx += 3;
                     }
                     b'u' => {
@@ -167,7 +164,9 @@ pub fn next_js_string_literal(text: &str, start: usize) -> Option<(String, usize
                             | (u32::from(hex_digit(bytes[idx + 2])?) << 8)
                             | (u32::from(hex_digit(bytes[idx + 3])?) << 4)
                             | u32::from(hex_digit(bytes[idx + 4])?);
-                        literal.push(char::from_u32(value)?);
+                        let ch = char::from_u32(value)?;
+                        let mut buf = [0; 4];
+                        literal.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
                         idx += 5;
                     }
                     b'\r' => {
@@ -180,37 +179,37 @@ pub fn next_js_string_literal(text: &str, start: usize) -> Option<(String, usize
                         idx += 1;
                     }
                     b'b' => {
-                        literal.push('\u{0008}');
+                        literal.push(0x08);
                         idx += 1;
                     }
                     b'f' => {
-                        literal.push('\u{000c}');
+                        literal.push(0x0c);
                         idx += 1;
                     }
                     b'n' => {
-                        literal.push('\n');
+                        literal.push(b'\n');
                         idx += 1;
                     }
                     b'r' => {
-                        literal.push('\r');
+                        literal.push(b'\r');
                         idx += 1;
                     }
                     b't' => {
-                        literal.push('\t');
+                        literal.push(b'\t');
                         idx += 1;
                     }
                     b'v' => {
-                        literal.push('\u{000b}');
+                        literal.push(0x0b);
                         idx += 1;
                     }
                     escaped => {
-                        literal.push(char::from(escaped));
+                        literal.push(escaped);
                         idx += 1;
                     }
                 }
                 continue;
             }
-            literal.push(char::from(byte));
+            literal.push(byte);
             idx += 1;
         }
         return None;
@@ -227,10 +226,10 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
-pub fn looks_like_modified_base85(input: &str) -> bool {
+pub fn looks_like_modified_base85(input: &[u8]) -> bool {
     input.len() >= codecs::MIN_PACKED_VIEWER_PAYLOAD_LEN
         && input.len() % 5 == 0
-        && input.bytes().all(|byte| {
+        && input.iter().copied().all(|byte| {
             byte.checked_sub(35)
                 .map(|mut digit| {
                     if digit > 56 {
@@ -243,11 +242,28 @@ pub fn looks_like_modified_base85(input: &str) -> bool {
 }
 
 pub fn looks_like_decoded_viewer_js(input: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(input) else {
-        return false;
-    };
-    text.starts_with("function ")
-        && (text.contains("loadpano") || text.contains("embedhtml5") || text.contains("krpano"))
+    input.starts_with(b"function ")
+        && (contains_bytes(input, b"loadpano")
+            || contains_bytes(input, b"embedhtml5")
+            || contains_bytes(input, b"krpano"))
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+fn trim_ascii(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map_or(start, |idx| idx + 1);
+    &bytes[start..end]
 }
 
 #[cfg(test)]
@@ -258,7 +274,7 @@ mod tests {
     fn detects_and_concatenates_encrypted_cdata() {
         let xml = br#"<encrypted><![CDATA[KENCR]]><![CDATA[URRpayload]]></encrypted>"#;
         assert!(is_encrypted_xml(xml));
-        assert_eq!(encrypted_payload(xml).unwrap(), "KENCRURRpayload");
+        assert_eq!(encrypted_payload(xml).unwrap(), b"KENCRURRpayload");
     }
 
     #[test]

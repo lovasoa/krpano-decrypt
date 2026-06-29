@@ -4,8 +4,8 @@ use crate::viewer::{encrypted_payload, extract_decoded_viewer_js, extract_key_fr
 use crate::{branches, modern_engine, old_engine};
 
 const PUBLIC_DEFAULT_KEY: &[u8] = b"actions overflow";
-const STANDARD_BASE64_ALPHABET: &str =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+const STANDARD_BASE64_ALPHABET: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
 
 // ---------------------------------------------------------------------------
 // Engine family detection
@@ -22,19 +22,15 @@ pub enum EngineFamily {
 }
 
 pub fn detect_engine(decoded_engine: &[u8]) -> EngineFamily {
-    let text = match std::str::from_utf8(decoded_engine) {
-        Ok(t) => t,
-        Err(_) => return EngineFamily::Old,
-    };
     // Multiple markers for old engines:
     // - "KENC" literal (most old engines)
     // - "b64u8=function" (old engine Base64 decoder function)
     // - "String(e).charCodeAt" (old engine byte-helper pattern)
     // - "String(h).charCodeAt" (old engine byte-helper pattern variant)
-    if text.contains("KENC")
-        || text.contains("b64u8=function")
-        || text.contains("String(e).charCodeAt")
-        || text.contains("String(h).charCodeAt")
+    if contains_bytes(decoded_engine, b"KENC")
+        || contains_bytes(decoded_engine, b"b64u8=function")
+        || contains_bytes(decoded_engine, b"String(e).charCodeAt")
+        || contains_bytes(decoded_engine, b"String(h).charCodeAt")
     {
         EngineFamily::Old
     } else {
@@ -102,7 +98,6 @@ pub fn decrypt_xml(
                 ctx.default_key
             );
             branches::z_branch_to_plaintext(body, ctx.default_key.as_bytes(), false)
-                .map(String::into_bytes)
         }
 
         (BodyCipher::ClassicZ, CipherMode::Protected, EngineFamily::Old) => {
@@ -112,7 +107,7 @@ pub fn decrypt_xml(
                 "decrypt_xml: old ClassicZ, key_variable={}",
                 ctx.key_variable
             );
-            branches::z_branch_to_plaintext(body, &key, true).map(String::into_bytes)
+            branches::z_branch_to_plaintext(body, &key, true)
         }
 
         // ── ClassicB (Base64 → RC4 → UTF-8) ──
@@ -123,8 +118,12 @@ pub fn decrypt_xml(
                 return Err(KrpanoDecryptError::MissingKey);
             }
             log::debug!("decrypt_xml: old ClassicB, default key");
-            branches::b_branch_to_plaintext_with_alphabet(body, &ctx.base64_alphabet, key, false)
-                .map(String::into_bytes)
+            branches::b_branch_to_plaintext_with_alphabet(
+                body,
+                ctx.base64_alphabet.as_bytes(),
+                key,
+                false,
+            )
         }
 
         (BodyCipher::ClassicB, CipherMode::Protected, EngineFamily::Old) => {
@@ -138,8 +137,12 @@ pub fn decrypt_xml(
                 return Err(KrpanoDecryptError::MissingKey);
             }
             log::debug!("decrypt_xml: old ClassicB, protected key");
-            branches::b_branch_to_plaintext_with_alphabet(body, &ctx.base64_alphabet, key, true)
-                .map(String::into_bytes)
+            branches::b_branch_to_plaintext_with_alphabet(
+                body,
+                ctx.base64_alphabet.as_bytes(),
+                key,
+                true,
+            )
         }
 
         (BodyCipher::ClassicB, mode, EngineFamily::Modern) => {
@@ -160,7 +163,7 @@ pub fn decrypt_xml(
                         .filter_map(|&c| char::from_u32(u32::from(c)))
                         .collect();
                     if s.len() >= 65 && s.starts_with("ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
-                        Some(s)
+                        Some(s.into_bytes())
                     } else {
                         None
                     }
@@ -170,13 +173,13 @@ pub fn decrypt_xml(
                     std::str::from_utf8(&decoded_engine)
                         .ok()
                         .and_then(old_engine::find_base64_alphabet_in_source)
+                        .map(String::into_bytes)
                 })
                 .unwrap_or_else(|| {
                     // Final fallback: standard RFC 4648 Base64 (with padding).
                     // Used by transitional engines whose source embeds no
-                    // custom alphabet. A wrong alphabet yields non-UTF-8
-                    // output that the pipeline rejects, so this is safe.
-                    STANDARD_BASE64_ALPHABET.to_string()
+                    // custom alphabet.
+                    STANDARD_BASE64_ALPHABET.to_vec()
                 });
             log::debug!(
                 "decrypt_xml: modern ClassicB, alphabet={} chars",
@@ -204,7 +207,6 @@ pub fn decrypt_xml(
                 &key,
                 mode == CipherMode::Protected,
             )
-            .map(String::into_bytes)
         }
 
         // ── Subdiv (token replacement → we.subdiv branch 5) ──
@@ -238,14 +240,13 @@ pub fn decrypt_xml(
 }
 
 fn decrypt_xml_without_viewer(
-    body: &str,
+    body: &[u8],
     cipher: BodyCipher,
     mode: CipherMode,
 ) -> Result<Vec<u8>, KrpanoDecryptError> {
     let plaintext = match (cipher, mode) {
         (BodyCipher::ClassicZ, CipherMode::Public) => {
-            branches::z_branch_to_plaintext(body, PUBLIC_DEFAULT_KEY, false)
-                .map(String::into_bytes)?
+            branches::z_branch_to_plaintext(body, PUBLIC_DEFAULT_KEY, false)?
         }
         (BodyCipher::ClassicB, CipherMode::Public) => {
             branches::b_branch_to_plaintext_with_alphabet(
@@ -253,8 +254,7 @@ fn decrypt_xml_without_viewer(
                 STANDARD_BASE64_ALPHABET,
                 PUBLIC_DEFAULT_KEY,
                 false,
-            )
-            .map(String::into_bytes)?
+            )?
         }
         _ => return Err(viewer_js_required(cipher, mode)),
     };
@@ -274,28 +274,44 @@ fn viewer_js_required(cipher: BodyCipher, mode: CipherMode) -> KrpanoDecryptErro
 }
 
 fn looks_like_krpano_xml_bytes(bytes: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return false;
-    };
-    let mut text = text.trim_start_matches('\u{feff}').trim_start();
+    let mut text = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+    text = trim_ascii_start(text);
     loop {
-        if text.starts_with("<krpano") {
+        if text.starts_with(b"<krpano") {
             return true;
         }
-        if text.starts_with("<?")
-            && let Some(end) = text.find("?>")
+        if text.starts_with(b"<?")
+            && let Some(end) = find_bytes(text, b"?>")
         {
-            text = text[end + 2..].trim_start();
+            text = trim_ascii_start(&text[end + 2..]);
             continue;
         }
-        if text.starts_with("<!--")
-            && let Some(end) = text.find("-->")
+        if text.starts_with(b"<!--")
+            && let Some(end) = find_bytes(text, b"-->")
         {
-            text = text[end + 3..].trim_start();
+            text = trim_ascii_start(&text[end + 3..]);
             continue;
         }
         return false;
     }
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    find_bytes(haystack, needle).is_some()
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn trim_ascii_start(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    &bytes[start..]
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +321,7 @@ fn looks_like_krpano_xml_bytes(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ModernWrapperKeyError;
     use crate::viewer;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -398,6 +415,45 @@ mod tests {
     /// without masking real content differences.
     fn normalize_crlf(bytes: &[u8]) -> Vec<u8> {
         bytes.iter().filter(|&&b| b != b'\r').copied().collect()
+    }
+
+    #[test]
+    fn malformed_modern_viewer_fixtures_return_useful_errors() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/malformed");
+        for fixture in [
+            "modern-short-wrapper-key",
+            "modern-checksum-tail-short",
+            "modern-browser-marker-index-out-of-range",
+        ] {
+            let dir = root.join(fixture);
+            let xml = fs::read(dir.join("tour.xml")).unwrap();
+            let js = fs::read(dir.join("tour.js")).unwrap();
+            let err = match decrypt_xml(&xml, Some(&js)) {
+                Ok(_) => panic!("{fixture}: malformed fixture unexpectedly decrypted"),
+                Err(err) => err,
+            };
+            match fixture {
+                "modern-short-wrapper-key" => assert!(matches!(
+                    err,
+                    KrpanoDecryptError::InvalidModernWrapperKey(
+                        ModernWrapperKeyError::ShortStartupParameter { .. }
+                    )
+                )),
+                "modern-checksum-tail-short" => assert!(matches!(
+                    err,
+                    KrpanoDecryptError::InvalidModernWrapperKey(
+                        ModernWrapperKeyError::ShortChecksumTail { .. }
+                    )
+                )),
+                "modern-browser-marker-index-out-of-range" => assert!(matches!(
+                    err,
+                    KrpanoDecryptError::InvalidModernWrapperKey(
+                        ModernWrapperKeyError::BrowserMarkerIndexOutOfRange { .. }
+                    )
+                )),
+                _ => unreachable!(),
+            }
+        }
     }
 
     #[test]

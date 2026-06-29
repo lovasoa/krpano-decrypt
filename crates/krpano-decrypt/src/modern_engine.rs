@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use base64::{Engine as _, engine::general_purpose};
 
-use crate::error::KrpanoDecryptError;
+use crate::error::{KrpanoDecryptError, ModernWrapperKeyError};
 use crate::old_engine::{EngineContext, KeyDerivation};
 
 /// Context extracted from a modern krpano engine.
@@ -82,13 +82,13 @@ pub fn extract_modern_context(
     let text = std::str::from_utf8(decoded_engine)
         .map_err(|_| KrpanoDecryptError::MissingViewerJsPayload)?;
 
-    let startup = find_startup_iife(text, wrapper_key).ok_or(KrpanoDecryptError::Unsupported)?;
+    let startup = find_startup_iife(text, wrapper_key)?;
     log::debug!(
         "extract_modern_context: found startup IIFE, checksum_constant={}",
         startup.constant
     );
     let (rows, side) = unpack_krp_payload(wrapper_key, &startup.body, startup.constant)
-        .map_err(|_| KrpanoDecryptError::Unsupported)?;
+        .map_err(KrpanoDecryptError::InvalidModernWrapperKey)?;
     log::debug!(
         "extract_modern_context: unpacked {} rows, {} side values",
         rows.len(),
@@ -149,13 +149,18 @@ struct StartupIife {
 /// for each `(function …){…}` IIFE, extract numeric literals from the
 /// function body as candidate checksum constants, then see whether
 /// unpacking the wrapper key succeeds.
-fn find_startup_iife(source: &str, wrapper_key: &str) -> Option<StartupIife> {
+fn find_startup_iife(source: &str, wrapper_key: &str) -> Result<StartupIife, KrpanoDecryptError> {
     let mut search_from = 0;
+    let mut unpack_error = None;
     while let Some(rel) = source[search_from..].find("(function ") {
         let abs_start = search_from + rel;
-        let brace_off = source[abs_start..].find('{')?;
+        let Some(brace_off) = source[abs_start..].find('{') else {
+            break;
+        };
         let abs_brace = abs_start + brace_off;
-        let end_brace = matching_brace(source, abs_brace)?;
+        let Some(end_brace) = matching_brace(source, abs_brace) else {
+            break;
+        };
         let body = source[abs_start + 1..=end_brace].to_string();
 
         // The checksum constant is a numeric literal in the IIFE body
@@ -164,19 +169,27 @@ fn find_startup_iife(source: &str, wrapper_key: &str) -> Option<StartupIife> {
             if constant < 100 {
                 continue;
             }
-            let k = compute_checksum(function_body(&body));
+            let Ok(function_body) = function_body(&body) else {
+                continue;
+            };
+            let k = compute_checksum(function_body);
             let n = constant.wrapping_sub(k);
             if n <= 1 || ((n.wrapping_sub(1)) >> 3) >= 32 {
                 continue;
             }
-            if unpack_krp_payload(wrapper_key, &body, constant).is_ok() {
-                return Some(StartupIife { constant, body });
+            match unpack_krp_payload(wrapper_key, &body, constant) {
+                Ok(_) => return Ok(StartupIife { constant, body }),
+                Err(err) => unpack_error = Some(err),
             }
         }
 
         search_from = end_brace + 1;
     }
-    None
+    if let Some(reason) = unpack_error {
+        Err(KrpanoDecryptError::InvalidModernWrapperKey(reason))
+    } else {
+        Err(KrpanoDecryptError::Unsupported)
+    }
 }
 
 /// Extract all unsigned-integer literals from a JS expression string.
@@ -291,21 +304,38 @@ fn charcodes_offset(s: &str, offset: i32) -> Vec<u32> {
 // =========================================================================
 
 /// Strip the IIFE function body to just the inner code (port of `rd`).
-fn function_body(source: &str) -> &str {
-    let start = source.find('{').unwrap() + 1;
-    let end = source.rfind('}').unwrap();
+fn function_body(source: &str) -> Result<&str, ModernWrapperKeyError> {
+    let start = source
+        .find('{')
+        .map(|idx| idx + 1)
+        .ok_or(ModernWrapperKeyError::MissingOpeningBrace)?;
+    let end = source
+        .rfind('}')
+        .ok_or(ModernWrapperKeyError::MissingClosingBrace)?;
+    if start > end {
+        return Err(ModernWrapperKeyError::InvalidBraceOrder);
+    }
+    if start == end {
+        return Ok("");
+    }
     let mut s = start;
     let mut e = end - 1;
     while s < source.len() && source.as_bytes()[s] <= 32 {
         s += 1;
     }
+    if s > e {
+        return Ok("");
+    }
     while e > s && source.as_bytes()[e] <= 32 {
         e -= 1;
     }
     if source.as_bytes()[e] == b';' {
+        if e == s {
+            return Ok("");
+        }
         e -= 1;
     }
-    &source[s..=e]
+    Ok(&source[s..=e])
 }
 
 /// Unpack a `krp:` wrapper key into `we.subdiv` rows.
@@ -316,9 +346,9 @@ fn unpack_krp_payload(
     key: &str,
     startup_body: &str,
     startup_constant: u32,
-) -> Result<(Vec<Vec<u16>>, Vec<u16>), String> {
+) -> Result<(Vec<Vec<u16>>, Vec<u16>), ModernWrapperKeyError> {
     let lf = build_lf_shuffle();
-    let body = function_body(startup_body);
+    let body = function_body(startup_body)?;
     let k = compute_checksum(body);
     let n = startup_constant.wrapping_sub(k);
     let q = (n.wrapping_sub(1)) >> 3;
@@ -333,6 +363,9 @@ fn unpack_krp_payload(
             .wrapping_mul(z_orig as i32)
             .wrapping_add(x as i32),
     );
+    if w == 0 {
+        return Err(ModernWrapperKeyError::ZeroModuloBase { startup_constant });
+    }
 
     // r array: r[d] = d - (d > 1) - (d > 59)
     let r: Vec<i32> = (0..=v as i32)
@@ -345,8 +378,15 @@ fn unpack_krp_payload(
         .collect();
 
     let key_bytes = key.as_bytes();
+    let z_idx = z_orig as usize - 1;
+    if z_idx >= key_bytes.len() {
+        return Err(ModernWrapperKeyError::ShortStartupParameter {
+            needed_index: z_idx,
+            key_len: key_bytes.len(),
+        });
+    }
     let d_len = key_bytes.len().saturating_sub(q as usize);
-    let mut t: i32 = i32::from(key_bytes[z_orig as usize - 1]); // JS: key.charCodeAt(z-1)
+    let mut t: i32 = i32::from(key_bytes[z_idx]); // JS: key.charCodeAt(z-1)
     let mut d = z_orig as usize;
     let mut rows: Vec<Vec<u16>> = Vec::new();
     let mut side: Vec<u16> = Vec::new();
@@ -359,10 +399,22 @@ fn unpack_krp_payload(
         // JS: r[(key.charCodeAt(d) - n) & v]
         let r_idx = ((key_char - n as i32) & (v as i32)) as usize;
         let rv = r[r_idx];
-        let ud = u_i32[d & (b_val as usize)];
+        let u_idx = d & (b_val as usize);
+        let Some(&ud) = u_i32.get(u_idx) else {
+            return Err(ModernWrapperKeyError::BrowserMarkerIndexOutOfRange {
+                index: u_idx,
+                len: u_i32.len(),
+            });
+        };
         // JS: (rv + d*q + ud + t) % (x + 1)
         let lf_idx = (rv + (d as i32) * (q as i32) + ud + t).rem_euclid(x as i32 + 1) as usize;
-        let g: i32 = lf[lf_idx] as i32;
+        let Some(&g) = lf.get(lf_idx) else {
+            return Err(ModernWrapperKeyError::ShuffleIndexOutOfRange {
+                index: lf_idx,
+                len: lf.len(),
+            });
+        };
+        let g = g as i32;
 
         // JS: t = ((t << (q+1)) + t*B + g) % E
         t = t
@@ -404,14 +456,23 @@ fn unpack_krp_payload(
     let mut gv: i32 = 0;
     let d2_len = d_len + q as usize;
     while d < d2_len {
+        let Some(&key_byte) = key_bytes.get(d) else {
+            return Err(ModernWrapperKeyError::ShortChecksumTail {
+                needed_index: d,
+                key_len: key_bytes.len(),
+            });
+        };
         // JS << masks shift to lower 5 bits
         let shifted = gv.wrapping_shl(z_orig & 31);
-        let rhs = i32::from(key_bytes[d]) - (10 * z_orig + q) as i32;
+        let rhs = i32::from(key_byte) - (10 * z_orig + q) as i32;
         gv = shifted | rhs;
         d += 1;
     }
     if gv != t {
-        return Err(format!("checksum mismatch: got {gv}, expected {t}"));
+        return Err(ModernWrapperKeyError::ChecksumMismatch {
+            got: gv,
+            expected: t,
+        });
     }
     Ok((rows, side))
 }
@@ -448,13 +509,13 @@ fn find_row_by_value(rows: &[Vec<u16>], target: &str) -> Option<String> {
 /// (`_(9493, body, 1)`).  `R/R` bodies additionally read the `pk=` protection
 /// record from the wrapper-key side data through the branch-12 trie.
 pub fn pp_rr_branch_to_plaintext(
-    body: &str,
+    body: &[u8],
     ctx: &ModernEngineContext,
 ) -> Result<String, KrpanoDecryptError> {
     if ctx.replacement_token.is_empty() {
         return Err(KrpanoDecryptError::Unsupported);
     }
-    let replaced = body.replace(&ctx.replacement_token, "\\");
+    let replaced = replace_bytes(body, ctx.replacement_token.as_bytes(), b"\\");
     let row = find_krpano_row(&ctx.rows).ok_or(KrpanoDecryptError::Unsupported)?;
     let protection_key = extract_protection_key(ctx)?;
     let mf = build_mf_table(ctx).unwrap_or_default();
@@ -564,12 +625,12 @@ pub(crate) fn build_mf_table(
 }
 
 pub(crate) fn subdiv_branch5_decode(
-    input: &str,
+    input: &[u8],
     row: &[u16],
     protection_key: Option<&str>,
     mf_table: Option<&HashMap<String, Vec<i64>>>,
 ) -> Result<String, KrpanoDecryptError> {
-    let d = input.as_bytes();
+    let d = input;
     if d.len() < 2 || row.len() <= 5 {
         return Err(KrpanoDecryptError::Unsupported);
     }
@@ -803,6 +864,24 @@ pub(crate) fn subdiv_branch5_decode(
     }
 
     Ok(krpano_utf8_decode(&out))
+}
+
+fn replace_bytes(input: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    if from.is_empty() {
+        return input.to_vec();
+    }
+    let mut out = Vec::with_capacity(input.len());
+    let mut idx = 0;
+    while idx < input.len() {
+        if input[idx..].starts_with(from) {
+            out.extend_from_slice(to);
+            idx += from.len();
+        } else {
+            out.push(input[idx]);
+            idx += 1;
+        }
+    }
+    out
 }
 
 fn js_shr(value: i64, shift: i64) -> i64 {
@@ -1172,7 +1251,7 @@ mod tests {
                 Ok(ctx) => eprintln!("{name}: context={ctx:?}"),
                 Err(err) => eprintln!("{name}: context error={err}"),
             }
-            if let Some(startup) = find_startup_iife(text, &key) {
+            if let Ok(startup) = find_startup_iife(text, &key) {
                 let (rows, _side) =
                     unpack_krp_payload(&key, &startup.body, startup.constant).unwrap();
                 eprintln!("{name}: rows={}", rows.len());
