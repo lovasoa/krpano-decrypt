@@ -119,8 +119,8 @@ The library depends only on `base64`, `regex`, `thiserror`, and `log`.
 1. **No JavaScript execution.** Keys are recovered by static analysis of the
    decoded engine source. Decryption is a pure function of the two input files.
 2. **Value-based identification.** Constants are located by stable semantic
-   value (`"actions overflow"`, `"z"`, `"krpano"`), never by hardcoded minified
-   identifiers — so the same code handles engines from 2018 through 2026.
+   value (`"actions overflow"`, `"krpano"`), never by hardcoded minified
+   identifiers. Subdiv bodies use `z` as a fixed escape marker.
 3. **Deterministic & offline.** No network, no JS runtime, no host application.
 
 See [`AGENTS.md §3`](./AGENTS.md) for the full reverse-engineering principles.
