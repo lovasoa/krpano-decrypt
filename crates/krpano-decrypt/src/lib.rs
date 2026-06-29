@@ -35,8 +35,8 @@
 //! - **No JavaScript execution.** Keys are recovered by static analysis of the
 //!   decoded engine source. The engine is never evaluated.
 //! - **Value-based row identification.** Row extraction searches by stable
-//!   semantic values (`"actions overflow"`, `"z"`, `"krpano"`) rather than
-//!   hardcoded minified identifiers, so it generalises across engine builds.
+//!   semantic values (`"actions overflow"`, `"krpano"`) rather than hardcoded
+//!   minified identifiers, so it generalises across engine builds.
 //! - **Deterministic.** Decryption is a pure function of the two input files.
 
 #![warn(missing_docs)]

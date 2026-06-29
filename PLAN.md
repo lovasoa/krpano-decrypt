@@ -131,14 +131,13 @@ Modern engines do not store keys in the source text. Instead, a startup IIFE rec
 2. Build a shuffle array from the engine's browser-name table (`Ma`, where `Ma[1]` is observed as `"Android Browser"`).
 3. Unpack the wrapper string into `we.subdiv` rows and **side data** — semicolon-separated key=value records (Base64-decoded then decoded as krpano-modified UTF-8).
 
-After unpacking, calls like `_("<id>")` read rows from the `we.subdiv` closure. All rows are searched **by value**:
+After unpacking, calls like `_("<id>")` read rows from the `we.subdiv` closure. Stable rows are searched **by value**:
 
 | Searched value | Becomes |
 |---------------|---------|
 | `"actions overflow"` | Default key (16 bytes, used by ClassicZ in Public mode) |
-| `"z"` | Replacement token (used by Subdiv cipher) |
 
-In all observed modern engines, the default key resolves to `"actions overflow"` and the replacement token to `"z"`, even though the row IDs differ across versions.
+In all observed modern engines, the default key resolves to `"actions overflow"`, even though row IDs differ across versions. Subdiv bodies use `z` as a fixed escape marker.
 
 ### 3.5. Pipeline overview
 
@@ -175,7 +174,7 @@ flowchart TD
         wrapper -->|"startup IIFE + unpack"| srows["we.subdiv rows"]
         wrapper -->|"startup IIFE + unpack"| side["side data"]
         srows -->|"search for 'actions overflow'"| mdef["default key (16 bytes)"]
-        srows -->|"search for 'z'"| token["replacement token (z)"]
+        token["fixed Subdiv escape marker (z)"]
     end
 
     cipher --> dispatch["body transform<br/>§4"]
@@ -275,9 +274,8 @@ on the engine version.
 
 **Body format:**
 
-1. Replace every occurrence of the replacement token (`"z"`) with `0x5C`
-   (backslash). The token is extracted from a `we.subdiv` row whose value is
-   `"z"`. In the Subdiv body encoding, `"z"` serves as an escape marker.
+1. Replace every occurrence of the fixed escape marker (`"z"`) with `0x5C`
+   (backslash). In the Subdiv body encoding, `"z"` serves as an escape marker.
 2. The first two bytes after replacement determine the mode and engine version:
    - `%*` (37, 42) = public (all engines)
    - `&*` (38, 42) = protected, 2023/2024 engines
@@ -512,4 +510,4 @@ instrument live krpano engines live under `tools/` (see `AGENTS.md`).
 
 **No JS execution.** Key extraction relies entirely on static analysis of the decoded engine source text. The engine is never evaluated at runtime.
 
-**Value-based row identification.** Row extraction avoids relying on per-build minified identifiers or hardcoded row IDs. It searches by stable semantic values (e.g. `"actions overflow"`, `"z"`, `"krpano"`) observed across engine versions.
+**Value-based row identification.** Row extraction avoids relying on per-build minified identifiers or hardcoded row IDs. It searches by stable semantic values (e.g. `"actions overflow"`, `"krpano"`) observed across engine versions. The Subdiv escape marker is the fixed byte `z`.

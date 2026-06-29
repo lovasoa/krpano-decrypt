@@ -13,9 +13,10 @@
 //      `pk=` protection key, `uk=` mixing data).
 //
 // All arithmetic is 32-bit signed to match JavaScript. After unpacking, rows
-// are searched BY VALUE: "actions overflow" -> default key, "z" -> replacement
-// token, "krpano" -> branch-5 constants. Row IDs differ per build, so the
-// value-based search is what makes this version-agnostic.
+// are searched BY VALUE: "actions overflow" -> default key, "krpano" ->
+// branch-5 constants. Row IDs differ per build, so the value-based search is
+// what makes this version-agnostic. Subdiv bodies use "z" as a fixed escape
+// marker.
 
 const MA = ["krpano", "Android Browser", "Chrome", "Firefox",
             "Gecko", "Safari", "Internet Explorer", "linux"];

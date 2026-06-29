@@ -110,8 +110,9 @@ support to new krpano versions:
 2. **Value-based row identification.** Row extraction never relies on per-build
    minified identifiers or hardcoded row indices. It searches by stable
    semantic values observed across engine versions — `"actions overflow"`
-   (default key), `"z"` (replacement token), `"krpano"` (branch-5 constants).
-   This is what lets the same code decrypt engines from 2018 through 2026.
+   (default key), `"krpano"` (branch-5 constants). Subdiv bodies use `z` as a
+   fixed escape marker. This is what lets the same code decrypt engines from
+   2018 through 2026.
 
 3. **Structural, not textual, pattern matching.** The startup IIFE is located
    by brace matching + numeric-literal extraction, not by a fixed regex. The
