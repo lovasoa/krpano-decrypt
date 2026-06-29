@@ -3,7 +3,7 @@
 //! A standalone Rust library for decrypting encrypted krpano tour XML and
 //! obfuscated viewer JavaScript.
 //!
-//! krpano (https://krpano.com) is a panorama viewer that ships tours as an
+//! krpano (<https://krpano.com>) is a panorama viewer that ships tours as an
 //! encrypted XML file (`tour.xml`) together with an obfuscated JavaScript
 //! engine (`tour.js`). This crate reverse-engineers the on-disk format and
 //! decrypts the XML without executing any JavaScript.
@@ -11,10 +11,12 @@
 //! ## Quick start
 //!
 //! ```no_run
-//! use krpano_decrypt::decrypt_xml;
+//! use krpano_decrypt::{decrypt_xml, inspect_with_viewer};
 //!
 //! let xml = std::fs::read("tour.xml").unwrap();
 //! let js  = std::fs::read("tour.js").unwrap();
+//! let info = inspect_with_viewer(&xml, Some(&js)).unwrap();
+//! eprintln!("{:?}", info);
 //! let plaintext = decrypt_xml(&xml, Some(&js)).unwrap();
 //! std::fs::write("tour.decrypted.xml", plaintext).unwrap();
 //! ```
@@ -67,6 +69,21 @@ pub use viewer::{
     encrypted_payload, extract_decoded_viewer_js, extract_key_from_viewer_js, is_encrypted_xml,
 };
 
+/// Decode the packed krpano viewer engine from a viewer JavaScript file.
+///
+/// This is the programmatic equivalent of the CLI's `decode-viewer` command.
+/// It returns the decoded JavaScript source bytes without executing them.
+pub fn decode_viewer_js(viewer_data: &[u8]) -> Result<Vec<u8>, KrpanoDecryptError> {
+    extract_decoded_viewer_js(viewer_data)
+}
+
+/// Extract the `krp:` or `ptp:` wrapper key embedded in a viewer JavaScript file.
+///
+/// This is the programmatic equivalent of the CLI's `wrapper-key` command.
+pub fn wrapper_key(viewer_data: &[u8]) -> Result<String, KrpanoDecryptError> {
+    extract_key_from_viewer_js(viewer_data)
+}
+
 /// Convenience wrapper that returns the decrypted XML as a UTF-8 string.
 ///
 /// This is equivalent to [`decrypt_xml`] but validates that the output is
@@ -96,6 +113,31 @@ pub struct PayloadInfo {
     pub is_encrypted: bool,
 }
 
+/// Information recovered from a krpano viewer JavaScript file.
+///
+/// Returned by [`inspect_viewer`] and embedded in [`Inspection`].
+#[derive(Debug, Clone)]
+pub struct ViewerInfo {
+    /// Length of the `krp:`/`ptp:` wrapper key string, when present.
+    pub wrapper_key_len: Option<usize>,
+    /// Length of the decoded engine JavaScript source, when the packed viewer
+    /// payload can be decoded.
+    pub decoded_engine_len: Option<usize>,
+    /// Engine family detected from the decoded engine source.
+    pub engine: Option<EngineFamily>,
+}
+
+/// Combined inspection result for an XML payload and an optional viewer file.
+///
+/// This is the programmatic equivalent of the CLI's `inspect` command.
+#[derive(Debug, Clone)]
+pub struct Inspection {
+    /// Parsed encrypted XML payload information.
+    pub payload: PayloadInfo,
+    /// Viewer information, if viewer JavaScript was provided.
+    pub viewer: Option<ViewerInfo>,
+}
+
 /// Inspect an encrypted krpano XML payload without decrypting it.
 ///
 /// Returns the parsed header and body length. If the input is not an encrypted
@@ -121,4 +163,38 @@ pub fn inspect(contents: &[u8]) -> Result<PayloadInfo, KrpanoDecryptError> {
         body_len,
         is_encrypted: true,
     })
+}
+
+/// Inspect a krpano viewer JavaScript file without decrypting an XML payload.
+///
+/// This scans for the wrapper key, decodes the packed engine when present, and
+/// reports the detected engine family. Missing viewer components are reported
+/// as `None` fields rather than errors so diagnostics can still be displayed
+/// for partially supported viewer files.
+pub fn inspect_viewer(viewer_data: &[u8]) -> ViewerInfo {
+    let wrapper_key_len = extract_key_from_viewer_js(viewer_data)
+        .ok()
+        .map(|key| key.len());
+    let decoded_engine = extract_decoded_viewer_js(viewer_data).ok();
+    let decoded_engine_len = decoded_engine.as_ref().map(Vec::len);
+    let engine = decoded_engine.as_deref().map(detect_engine);
+
+    ViewerInfo {
+        wrapper_key_len,
+        decoded_engine_len,
+        engine,
+    }
+}
+
+/// Inspect an encrypted XML payload and, optionally, its matching viewer JS.
+///
+/// This is the easiest way to get the same metadata shown by the CLI `inspect`
+/// command from Rust code.
+pub fn inspect_with_viewer(
+    contents: &[u8],
+    viewer_data: Option<&[u8]>,
+) -> Result<Inspection, KrpanoDecryptError> {
+    let payload = inspect(contents)?;
+    let viewer = viewer_data.map(inspect_viewer);
+    Ok(Inspection { payload, viewer })
 }

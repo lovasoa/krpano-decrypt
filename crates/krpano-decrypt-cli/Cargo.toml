@@ -13,6 +13,7 @@ readme = "../../README.md"
 [[bin]]
 name = "krpano-decrypt"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 krpano-decrypt.workspace = true
