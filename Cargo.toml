@@ -1,18 +1,5 @@
-# krpano-decrypt — standalone reverse-engineered krpano decryption toolkit.
-#
-# This workspace contains:
-#   - `krpano-decrypt`     — a reusable Rust library that decrypts encrypted
-#                            krpano tour XML and obfuscated viewer JS.
-#   - `krpano-decrypt-cli` — a versatile command-line tool built on the library.
-#
-# See README.md for a high-level overview, AGENTS.md for the architecture, and
-# PLAN.md for the implementation-independent format documentation.
-
-[workspace]
-resolver = "2"
-members = ["crates/krpano-decrypt", "crates/krpano-decrypt-cli"]
-
-[workspace.package]
+[package]
+name = "krpano-decrypt"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
@@ -20,19 +7,32 @@ license = "GPL-3.0-only"
 repository = "https://github.com/lovasoa/krpano-decrypt"
 homepage = "https://github.com/lovasoa/krpano-decrypt"
 authors = ["lovasoa"]
+description = "Decrypt encrypted krpano tour XML and obfuscated viewer JavaScript"
+readme = "README.md"
+keywords = ["krpano", "decrypt", "xml", "javascript", "panorama"]
+categories = ["cryptography", "multimedia", "parser-implementations"]
 
-[workspace.dependencies]
-krpano-decrypt = { path = "crates/krpano-decrypt", version = "0.1.0" }
-log = "0.4"
+[dependencies]
 base64 = "0.22"
 regex = "1"
 thiserror = "2"
+log = "0.4"
+
+[dev-dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde-xml-rs = "0.8"
-clap = { version = "4", features = ["derive"] }
-anyhow = "1"
-env_logger = "0.11"
+
+[lib]
+name = "krpano_decrypt"
+path = "src/lib.rs"
+
+[[example]]
+name = "krpano-decrypt"
+path = "examples/krpano-decrypt.rs"
 
 # Shared profile for faster CI builds.
 [profile.dev]

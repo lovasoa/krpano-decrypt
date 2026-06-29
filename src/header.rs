@@ -51,11 +51,13 @@ pub struct KencHeader {
 }
 
 impl KencHeader {
+    /// Number of bytes in a `KENC....` header.
     pub const LEN: usize = 8;
 
     /// `k = (r << 4) + (r << 2)` where `r = 4` in the modern engine.
     const K: u32 = 80;
 
+    /// Parse an encrypted payload that starts with a `KENC....` header.
     pub fn parse(payload: &[u8]) -> Result<Self, KrpanoDecryptError> {
         let header = payload
             .get(..Self::LEN)

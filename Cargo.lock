@@ -227,24 +227,16 @@ dependencies = [
 name = "krpano-decrypt"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base64",
+ "clap",
+ "env_logger",
  "log",
  "regex",
  "serde",
  "serde-xml-rs",
  "serde_json",
  "thiserror",
-]
-
-[[package]]
-name = "krpano-decrypt-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "env_logger",
- "krpano-decrypt",
- "log",
 ]
 
 [[package]]

@@ -8,8 +8,8 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use krpano_decrypt::{
-    BodyCipher, CipherMode, EngineFamily, decrypt_xml, decrypt_xml_to_string, detect_engine,
-    extract_decoded_viewer_js, extract_key_from_viewer_js, inspect,
+    BodyCipher, CipherMode, EngineFamily, decrypt_xml, detect_engine, extract_decoded_viewer_js,
+    extract_key_from_viewer_js, inspect,
 };
 
 /// Decrypt obfuscated krpano tour XML and viewer JavaScript.
@@ -220,11 +220,4 @@ fn mode_name(m: CipherMode) -> &'static str {
         CipherMode::Public => "Public (no license key)",
         CipherMode::Protected => "Protected (license key required)",
     }
-}
-
-// Keep `decrypt_xml_to_string` referenced so it is part of the public surface
-// documented from the CLI even if a future subcommand uses it.
-#[allow(dead_code)]
-fn _ensure_string_api_linked(contents: &[u8], js: Option<&[u8]>) {
-    let _ = decrypt_xml_to_string(contents, js);
 }

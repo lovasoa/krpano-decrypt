@@ -21,6 +21,8 @@ pub enum EngineFamily {
     Modern,
 }
 
+/// Detect whether decoded viewer JavaScript belongs to the old or modern
+/// krpano engine family.
 pub fn detect_engine(decoded_engine: &[u8]) -> EngineFamily {
     // Multiple markers for old engines:
     // - "KENC" literal (most old engines)
@@ -423,7 +425,7 @@ mod tests {
 
     #[test]
     fn malformed_modern_viewer_fixtures_return_useful_errors() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/malformed");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/malformed");
         for fixture in [
             "modern-short-wrapper-key",
             "modern-checksum-tail-short",
@@ -463,13 +465,11 @@ mod tests {
     #[test]
     fn decodes_packed_viewer_js_payload() {
         let js = fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../testdata/encrypted/2023-04-30/tour.js"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted/2023-04-30/tour.js"),
         )
         .unwrap();
         let mut expected = fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../testdata/encrypted/2023-04-30/decoded.js"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted/2023-04-30/decoded.js"),
         )
         .unwrap();
         if expected.last() == Some(&b'\n') {
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn decodes_all_encrypted_krpano_viewer_js_fixtures() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted");
         let mut decoded_count = 0;
         for entry in fs::read_dir(&root).unwrap() {
             let dir = entry.unwrap().path();
@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn all_fixtures_have_correct_kenc_header() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted");
         let mut checked = 0;
         for entry in fs::read_dir(&root).unwrap() {
             let dir = entry.unwrap().path();
@@ -680,7 +680,7 @@ mod tests {
 
     #[test]
     fn all_fixtures_classify_correctly() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted");
         let mut checked = 0;
         for entry in fs::read_dir(&root).unwrap() {
             let dir = entry.unwrap().path();
@@ -725,7 +725,7 @@ mod tests {
 
     #[test]
     fn all_fixtures_extract_correct_wrapper_key_length() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted");
         let mut checked = 0;
         for entry in fs::read_dir(&root).unwrap() {
             let dir = entry.unwrap().path();
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn all_fixtures_decode_viewer_js_to_expected_length() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted");
         let mut checked = 0;
         for entry in fs::read_dir(&root).unwrap() {
             let dir = entry.unwrap().path();
@@ -792,129 +792,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Analysis harness
-    // -----------------------------------------------------------------
-
-    #[allow(dead_code)]
-    struct DecryptStages {
-        fixture: String,
-        header: KencHeader,
-        cipher: BodyCipher,
-        mode: CipherMode,
-        wrapper_key: Option<String>,
-        decoded_engine_len: usize,
-        encrypted_body_len: usize,
-        body_decoded_len: Option<usize>,
-        byte_decrypted_len: Option<usize>,
-        lz4_decompressed_len: Option<usize>,
-        plaintext_len: Option<usize>,
-        plaintext_prefix: Option<String>,
-    }
-
-    impl DecryptStages {
-        fn print_row(&self) {
-            eprintln!(
-                "| {fixture:14} | {header:10} | {cipher:?} | {mode:?} | {key_len:>3} | {engine:>7} | {body:>5} | {b85:>5} | {dec:>5} | {lz4:>6} | {plain:>6} | {prefix}",
-                fixture = self.fixture,
-                header = self.header.raw,
-                cipher = self.cipher,
-                mode = self.mode,
-                key_len = self
-                    .wrapper_key
-                    .as_ref()
-                    .map_or_else(|| "-".to_string(), |k| k.len().to_string()),
-                engine = self.decoded_engine_len,
-                body = self.encrypted_body_len,
-                b85 = self
-                    .body_decoded_len
-                    .map_or_else(|| "-".to_string(), |v| v.to_string()),
-                dec = self
-                    .byte_decrypted_len
-                    .map_or_else(|| "-".to_string(), |v| v.to_string()),
-                lz4 = self
-                    .lz4_decompressed_len
-                    .map_or_else(|| "-".to_string(), |v| v.to_string()),
-                plain = self
-                    .plaintext_len
-                    .map_or_else(|| "-".to_string(), |v| v.to_string()),
-                prefix = self.plaintext_prefix.as_deref().unwrap_or("-"),
-            );
-        }
-    }
-
-    fn collect_stages(fixture_dir: &Path) -> DecryptStages {
-        let dir_name = fixture_dir
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-
-        let xml_path = encrypted_xml_path(fixture_dir).unwrap_or_else(|| {
-            panic!("missing encrypted XML fixture in {}", fixture_dir.display())
-        });
-        let xml = fs::read(&xml_path).unwrap();
-        let payload = viewer::encrypted_payload(&xml).unwrap();
-        let header = KencHeader::parse(&payload).unwrap();
-        let cipher = header.cipher;
-        let mode = header.mode;
-        let body = header.payload(&payload);
-        let encrypted_body_len = body.len();
-
-        let js_path = viewer_js_path(fixture_dir);
-        let wrapper_key = js_path.as_ref().and_then(|p| {
-            let js = fs::read(p).ok()?;
-            extract_key_from_viewer_js(&js).ok()
-        });
-        let decoded_engine_len = js_path
-            .as_ref()
-            .and_then(|p| fs::read(p).ok())
-            .and_then(|js| extract_decoded_viewer_js(&js).ok())
-            .map_or(0, |d| d.len());
-
-        DecryptStages {
-            fixture: dir_name,
-            header,
-            cipher,
-            mode,
-            wrapper_key,
-            decoded_engine_len,
-            encrypted_body_len,
-            body_decoded_len: None,
-            byte_decrypted_len: None,
-            lz4_decompressed_len: None,
-            plaintext_len: None,
-            plaintext_prefix: None,
-        }
-    }
-
-    #[test]
-    #[ignore]
-    fn analysis_harness_prints_all_stages() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted");
-        let mut stages: Vec<DecryptStages> = Vec::new();
-        for entry in fs::read_dir(&root).unwrap() {
-            let dir = entry.unwrap().path();
-            if !dir.is_dir() {
-                continue;
-            }
-            stages.push(collect_stages(&dir));
-        }
-        stages.sort_by(|a, b| a.fixture.cmp(&b.fixture));
-        for s in &stages {
-            s.print_row();
-        }
-        assert!(!stages.is_empty());
-    }
-
-    // -----------------------------------------------------------------
     // End-to-end decryption tests
     // -----------------------------------------------------------------
 
     #[test]
     fn decrypt_xml_2018_04_04() {
-        let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted/2018-04-04");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted/2018-04-04");
         let xml = fs::read(root.join("tour.xml")).unwrap();
         let js = fs::read(root.join("tour.js")).unwrap();
 
@@ -929,8 +812,7 @@ mod tests {
 
     #[test]
     fn decrypt_xml_public_classicb_without_viewer_js() {
-        let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted/2013-06-05-B");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted/2013-06-05-B");
         let xml = fs::read(root.join("tour.xml")).unwrap();
 
         let plaintext = decrypt_xml(&xml, None).unwrap();
@@ -943,8 +825,7 @@ mod tests {
 
     #[test]
     fn decrypt_xml_public_classicz_without_viewer_js() {
-        let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted/2018-04-04");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted/2018-04-04");
         let xml = fs::read(root.join("tour.xml")).unwrap();
 
         let plaintext = decrypt_xml(&xml, None).unwrap();
@@ -958,7 +839,7 @@ mod tests {
     #[test]
     fn decrypt_xml_public_subdiv_without_viewer_js() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/encrypted/2026-06-25-pp-01_minimal");
+            .join("testdata/encrypted/2026-06-25-pp-01_minimal");
         let xml = fs::read(root.join("tour.xml")).unwrap();
         let expected = fs::read(root.join("plaintext.xml")).unwrap();
 
@@ -968,8 +849,7 @@ mod tests {
 
     #[test]
     fn decrypt_xml_protected_without_viewer_js_returns_structured_error() {
-        let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted/2015-08-04");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted/2015-08-04");
         let xml = fs::read(root.join("tour.xml")).unwrap();
 
         let err = decrypt_xml(&xml, None).unwrap_err();
@@ -980,7 +860,7 @@ mod tests {
     fn decrypt_xml_protected_subdiv_fixtures() {
         for fixture in ["2023-02-07", "2023-04-30", "2023-12-11", "2024-12-20"] {
             let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../testdata/encrypted")
+                .join("testdata/encrypted")
                 .join(fixture);
             let xml_path = encrypted_xml_path(&root)
                 .unwrap_or_else(|| panic!("{fixture}: missing encrypted XML"));
@@ -1008,7 +888,7 @@ mod tests {
     fn decrypt_xml_public_subdiv_fixture() {
         let fixture = "2023-04-30-PP";
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/encrypted")
+            .join("testdata/encrypted")
             .join(fixture);
         let xml_path =
             encrypted_xml_path(&root).unwrap_or_else(|| panic!("{fixture}: missing encrypted XML"));
@@ -1036,7 +916,7 @@ mod tests {
         // case-7 key. Exercises the modern-ClassicB dispatch arm.
         let fixture = "2018-04-23-KENCRUBR";
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/encrypted")
+            .join("testdata/encrypted")
             .join(fixture);
         let xml_path =
             encrypted_xml_path(&root).unwrap_or_else(|| panic!("{fixture}: missing encrypted XML"));
@@ -1068,7 +948,7 @@ mod tests {
             "2017-09-21",
         ] {
             let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../testdata/encrypted")
+                .join("testdata/encrypted")
                 .join(fixture);
             let xml_path = encrypted_xml_path(&root)
                 .unwrap_or_else(|| panic!("{fixture}: missing encrypted XML"));
@@ -1098,7 +978,7 @@ mod tests {
     /// Failures are collected and reported together at the end.
     #[test]
     fn decrypt_xml_all_fixtures_to_valid_xml() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted");
         let mut tested = 0;
         let mut failures: Vec<String> = Vec::new();
         for entry in fs::read_dir(&root).unwrap() {
@@ -1171,161 +1051,6 @@ mod tests {
             tested >= 18,
             "expected at least 18 successful fixture directories, found {tested}"
         );
-    }
-
-    #[test]
-    fn probe_external_repos() {
-        use std::collections::BTreeMap;
-        use std::fs;
-        let candidates: &[(&str, &str, &str)] = &[
-            // KENCPUBR - ClassicB+Public+Old
-            (
-                "/tmp/kenc-repos/SenYuanZ__Museum-News/News-2/bwg3d/plugins/map_core.xml",
-                "/tmp/kenc-repos/SenYuanZ__Museum-News/News-2/bwg3d/plugins/map_core.js",
-                "KENCPUBR: map_core",
-            ),
-            // KENCPUPR - Subdiv+Public+Modern
-            (
-                "/tmp/kenc-repos/SanyoRadio__Saronida-Panorama/saro.xml",
-                "/tmp/kenc-repos/SanyoRadio__Saronida-Panorama/saro.js",
-                "KENCPUPR: saro 1.20.2",
-            ),
-            // KENCPUZR - ClassicZ+Public+Modern
-            (
-                "/tmp/kenc-repos/iflycn__vr/inc/pano_webvr.xml",
-                "/tmp/kenc-repos/iflycn__vr/inc/pano_webvr.js",
-                "KENCPUZR: pano_webvr",
-            ),
-            // KENCRURR - Subdiv+Protected+Modern
-            (
-                "/tmp/kenc-repos/poricf__Vr-secondround/Lycee(Newroad)_Type A3/tour.xml",
-                "/tmp/kenc-repos/poricf__Vr-secondround/Lycee(Newroad)_Type A3/tour.js",
-                "KENCRURR: Lycee 1.21",
-            ),
-            (
-                "/tmp/kenc-repos/parakhc4__Vincent_inn_3D_Tour/tour.xml",
-                "/tmp/kenc-repos/parakhc4__Vincent_inn_3D_Tour/tour.js",
-                "KENCRURR: Vincent 1.21",
-            ),
-            // More KENCRURR pairs
-            (
-                "/tmp/kenc-repos/Dilhakk__Temervr/Seken_Lycee(Type_08)/tour.xml",
-                "/tmp/kenc-repos/Dilhakk__Temervr/Seken_Lycee(Type_08)/tour.js",
-                "KENCRURR: Seken Lycee",
-            ),
-            // KENCRUZR - ClassicZ+Protected+Old
-            (
-                "/tmp/kenc-repos/poricf__Vr-secondround/Lycee(Newroad)_Type A3/plugins/webvr.xml",
-                "/tmp/kenc-repos/poricf__Vr-secondround/Lycee(Newroad)_Type A3/plugins/webvr.js",
-                "KENCRUZR: webvr plugin",
-            ),
-            (
-                "/tmp/kenc-repos/duheng__vrseat/src/setting/tour.xml",
-                "/tmp/kenc-repos/duheng__vrseat/src/setting/tour.js",
-                "KENCRUZR: duheng 1.19",
-            ),
-            // More KENCRUZR pairs
-            (
-                "/tmp/kenc-repos/tinyhousecn__Toilet-Expandable-Container-House-Kaipu/pano.xml",
-                "/tmp/kenc-repos/tinyhousecn__Toilet-Expandable-Container-House-Kaipu/pano.js",
-                "KENCRUZR: tinyhousecn",
-            ),
-            // KENCRUBR - ClassicB+Protected
-            (
-                "/tmp/kenc-repos/iamsayan__virtual-tours/2022/e55b32193661624c300000df/32data/32.xml",
-                "/tmp/kenc-repos/iamsayan__virtual-tours/2022/e55b32193661624c300000df/32data/32.js",
-                "KENCRUBR: iamsayan 32",
-            ),
-            (
-                "/tmp/kenc-repos/iNATS__inatsVr/iNATS Demodata/iNATS Demo.xml",
-                "/tmp/kenc-repos/iNATS__inatsVr/iNATS Demodata/iNATS Demo.js",
-                "KENCRUBR: iNATS",
-            ),
-            (
-                "/tmp/kenc-repos/Azat301__my/1.xml",
-                "/tmp/kenc-repos/Azat301__my/1.js",
-                "KENCRUBR: Azat301 1",
-            ),
-        ];
-
-        let mut summaries: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-        for (xml_path, js_path, label) in candidates {
-            let xml = match fs::read(xml_path) {
-                Ok(x) => x,
-                Err(_) => {
-                    summaries
-                        .entry("XML_NOT_FOUND".into())
-                        .or_default()
-                        .push(label.to_string());
-                    continue;
-                }
-            };
-            let js = match fs::read(js_path) {
-                Ok(x) => x,
-                Err(_) => {
-                    summaries
-                        .entry("JS_NOT_FOUND".into())
-                        .or_default()
-                        .push(label.to_string());
-                    continue;
-                }
-            };
-            let Ok(payload) = viewer::encrypted_payload(&xml) else {
-                summaries
-                    .entry("FAIL: payload_extraction".into())
-                    .or_default()
-                    .push(label.to_string());
-                continue;
-            };
-            let _header = match KencHeader::parse(&payload) {
-                Ok(h) => h,
-                Err(e) => {
-                    summaries
-                        .entry(format!("FAIL: header_parse({e})"))
-                        .or_default()
-                        .push(label.to_string());
-                    continue;
-                }
-            };
-            let wrapper_key = extract_key_from_viewer_js(&js);
-            let decoded_engine = match extract_decoded_viewer_js(&js) {
-                Ok(d) => d,
-                Err(e) => {
-                    summaries
-                        .entry(format!("FAIL: decode_viewer_js({e})"))
-                        .or_default()
-                        .push(label.to_string());
-                    continue;
-                }
-            };
-            let engine = detect_engine(&decoded_engine);
-            match decrypt_xml(&xml, Some(&js)) {
-                Ok(plaintext) => {
-                    summaries.entry("OK".into()).or_default().push(format!(
-                        "{label} plain={} engine={engine:?}",
-                        plaintext.len()
-                    ));
-                }
-                Err(e) => {
-                    let key = format!(
-                        "FAIL: decrypt engine={engine:?} wk={} de={} err={e}",
-                        wrapper_key.as_ref().map_or(0, |k: &String| k.len()),
-                        decoded_engine.len()
-                    );
-                    summaries.entry(key).or_default().push(label.to_string());
-                }
-            }
-        }
-
-        eprintln!("\n=== RESULTS BY CATEGORY ===");
-        for (category, labels) in &summaries {
-            eprintln!("  [{category}]");
-            for l in labels {
-                eprintln!("    {l}");
-            }
-        }
-        eprintln!("\n{} categories total", summaries.len());
     }
 
     #[test]

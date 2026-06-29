@@ -9,10 +9,15 @@ static ENCRYPTED_RE: LazyLock<Regex> =
 static CDATA_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?is)<!\[CDATA\[(?P<cdata>.*?)\]\]>"#).unwrap());
 
+/// Return `true` if the input contains a krpano `<encrypted>` payload.
 pub fn is_encrypted_xml(contents: &[u8]) -> bool {
     ENCRYPTED_RE.is_match(contents)
 }
 
+/// Extract the raw encrypted payload from a krpano XML document.
+///
+/// CDATA sections inside `<encrypted>` are concatenated. If there is no CDATA,
+/// the trimmed element body is returned directly.
 pub fn encrypted_payload(contents: &[u8]) -> Result<Vec<u8>, KrpanoDecryptError> {
     if !ENCRYPTED_RE.is_match(contents) {
         return Err(KrpanoDecryptError::MissingEncryptedPayload);
@@ -37,6 +42,7 @@ pub fn encrypted_payload(contents: &[u8]) -> Result<Vec<u8>, KrpanoDecryptError>
 /// Known wrapper key prefixes used across krpano versions.
 const WRAPPER_KEY_PREFIXES: &[&[u8]] = &[b"krp:", b"ptp:"];
 
+/// Extract the `krp:` or `ptp:` wrapper key from krpano viewer JavaScript.
 pub fn extract_key_from_viewer_js(contents: &[u8]) -> Result<String, KrpanoDecryptError> {
     log::debug!(
         "extract_key_from_viewer_js: scanning {} bytes for wrapper key",
@@ -68,6 +74,7 @@ pub fn extract_key_from_viewer_js(contents: &[u8]) -> Result<String, KrpanoDecry
     })
 }
 
+/// Decode the packed viewer engine embedded in krpano viewer JavaScript.
 pub fn extract_decoded_viewer_js(contents: &[u8]) -> Result<Vec<u8>, KrpanoDecryptError> {
     log::debug!(
         "extract_decoded_viewer_js: scanning {} bytes for packed viewer",

@@ -1,6 +1,6 @@
 // Deobfuscated: krpano modified-Base85 decoder (used to unpack the viewer JS
 // and the ClassicZ body). See PLAN.md §3.1.
-// Rust port: crates/krpano-decrypt/src/codecs.rs (`decode_modified_base85*`).
+// Rust port: src/codecs.rs (`decode_modified_base85*`).
 //
 // Groups of 5 ASCII characters decode to one 32-bit integer. krpano's variant
 // skips code point 92 (backslash) in the value table, so digits > 56 are

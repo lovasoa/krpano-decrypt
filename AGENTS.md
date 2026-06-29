@@ -15,23 +15,21 @@ format, and how the dynamic analysis tools and reference JavaScript fit in.
 
 ```
 krpano-decrypt/
-├── Cargo.toml                 # workspace root (library + CLI)
-├── crates/
-│   ├── krpano-decrypt/        # the reusable library crate
-│   │   └── src/
-│   │       ├── lib.rs         # public API: decrypt_xml, inspect, re-exports
-│   │       ├── error.rs       # KrpanoDecryptError (one variant per stage)
-│   │       ├── header.rs      # KencHeader, BodyCipher, CipherMode     §2.2
-│   │       ├── codecs.rs      # Modified Base85, LZ4 block              §3.1
-│   │       ├── crypto.rs      # RC4-like byte decryptor                 §4.1
-│   │       ├── viewer.rs      # packed-viewer decode + wrapper key      §3.1, §3.3–3.4
-│   │       ├── old_engine.rs  # old engine key derivation               §3.3
-│   │       ├── modern_engine.rs # modern engine key extraction          §3.4
-│   │       ├── branches.rs    # ClassicZ / ClassicB / Subdiv bodies     §4.2–4.4
-│   │       └── engine.rs      # detect_engine + decrypt_xml dispatch    §3.5, §5
-│   └── krpano-decrypt-cli/    # the `krpano-decrypt` binary
-│       └── src/main.rs        # clap CLI: decrypt / decode-viewer /
-│                               #              wrapper-key / inspect
+├── Cargo.toml                 # single crate manifest
+├── src/
+│   ├── lib.rs                 # public API: decrypt_xml, inspect, re-exports
+│   ├── error.rs               # KrpanoDecryptError (one variant per stage)
+│   ├── header.rs              # KencHeader, BodyCipher, CipherMode     §2.2
+│   ├── codecs.rs              # Modified Base85, LZ4 block              §3.1
+│   ├── crypto.rs              # RC4-like byte decryptor                 §4.1
+│   ├── viewer.rs              # packed-viewer decode + wrapper key      §3.1, §3.3–3.4
+│   ├── old_engine.rs          # old engine key derivation               §3.3
+│   ├── modern_engine.rs       # modern engine key extraction            §3.4
+│   ├── branches.rs            # ClassicZ / ClassicB / Subdiv bodies     §4.2–4.4
+│   └── engine.rs              # detect_engine + decrypt_xml dispatch    §3.5, §5
+├── examples/
+│   └── krpano-decrypt.rs      # clap CLI: decrypt / decode-viewer /
+│                              #              wrapper-key / inspect
 ├── testdata/encrypted/        # fixture corpus (one dir per tour)       §7
 ├── reference/                 # deobfuscated JS functions (see §4)
 ├── tools/                     # dynamic analysis tools (see §5)
@@ -40,15 +38,16 @@ krpano-decrypt/
 └── README.md                  # high-level overview
 ```
 
-The workspace splits the **library** (`krpano-decrypt`) from the **CLI**
-(`krpano-decrypt-cli`) so that depending on the library does not pull in CLI
-dependencies (`clap`, `anyhow`, `env_logger`).
+The repository is a single Rust package. The reusable library lives in `src/`;
+the command-line tool is a standard Cargo example so the library dependency
+graph stays small while the CLI remains easy to launch with
+`cargo run --example krpano-decrypt -- ...`.
 
 ---
 
 ## 2. The decryption pipeline (end to end)
 
-`decrypt_xml(contents, viewer_data)` ([`engine.rs`](./crates/krpano-decrypt/src/engine.rs))
+`decrypt_xml(contents, viewer_data)` ([`engine.rs`](./src/engine.rs))
 is the single entry point. It mirrors the pipeline in [PLAN.md §3.5](./PLAN.md):
 
 ```mermaid
@@ -208,9 +207,9 @@ See `tools/README.md` for per-tool usage and prerequisites.
 - **JSON cross-check.** `modern_engine` tests compare the static Rust extractor
   against `rows.json` produced by `tools/extract_modern_rows.mjs` to catch
   drift between the JS ground truth and the Rust port.
-- **Probe harnesses.** `#[ignore]`d tests (`analysis_harness_prints_all_stages`,
-  `probe_external_repos`, env-var `KRPANO_PROBE_XML`/`KRPANO_PROBE_JS`) let
-  developers triage new tours without writing new code.
+- **Probe harness.** The env-var driven `KRPANO_PROBE_XML` /
+  `KRPANO_PROBE_JS` test lets developers triage a single new tour without
+  adding it to the fixture corpus.
 
 ---
 
@@ -226,12 +225,13 @@ See `tools/README.md` for per-tool usage and prerequisites.
    `old_engine.rs`, preserving the i32 arithmetic.
 5. Add the fixture to the metadata tables in `engine.rs` tests and the
    `PLAN.md §7` corpus table. Add a `plaintext.xml` golden if possible.
-6. `cargo test` must stay green; CI runs it on every push.
+6. `cargo test`, `cargo clippy --all-targets -- -D warnings`, and
+   `npm test --prefix tools` must stay green.
 
 ---
 
-## 8. CI
+## 8. Validation
 
-`.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy`, `cargo
-test`, and a Node step for the dynamic-analysis tool smoke tests (`tools/`).
-The test suite is self-contained: no network, no external repos required.
+Before publishing changes, run `cargo fmt --check`, `cargo clippy --all-targets
+-- -D warnings`, and `cargo test`. The Rust test suite is self-contained: no
+network and no external repositories are required.

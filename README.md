@@ -9,8 +9,9 @@ specifies the *transform*; the JS holds the *key*. This project reverse-engineer
 the on-disk format and decrypts the XML by static analysis of the decoded engine
 — the engine is **never executed**.
 
-This is a clean, dependency-light Rust **library** plus a versatile **CLI**, kept
-completely independent of any host application.
+This is a clean, dependency-light Rust **library** plus a versatile **CLI**
+provided as a Cargo example, kept completely independent of any host
+application.
 
 ---
 
@@ -18,8 +19,8 @@ completely independent of any host application.
 
 | Path | What it is |
 |------|------------|
-| **`crates/krpano-decrypt/`** | The reusable Rust library. Entry point: `decrypt_xml()`. |
-| **`crates/krpano-decrypt-cli/`** | The `krpano-decrypt` command-line tool. |
+| **`src/`** | The reusable Rust library. Entry point: `decrypt_xml()`. |
+| **`examples/krpano-decrypt.rs`** | The `krpano-decrypt` command-line tool. |
 | **`PLAN.md`** | Implementation-independent documentation of the encrypted format. Start here. |
 | **`AGENTS.md`** | Architecture of the crate, mapping code modules to the format docs, plus the reverse-engineering workflow. |
 | **`reference/`** | Checked-in, deobfuscated versions of the most important krpano JS functions (with meaningful names). |
@@ -48,16 +49,23 @@ end-to-end. See [`PLAN.md §7`](./PLAN.md) for the full corpus table.
 
 ---
 
-## Install
+## Build
 
 ```sh
-cargo install --path crates/krpano-decrypt-cli   # installs the `krpano-decrypt` binary
+cargo build
 ```
 
-Or build from source:
+The CLI is a standard Cargo example:
 
 ```sh
-cargo build --release   # binary at target/release/krpano-decrypt
+cargo run --example krpano-decrypt -- --help
+```
+
+For a release build of the CLI example:
+
+```sh
+cargo build --release --example krpano-decrypt
+# binary at target/release/examples/krpano-decrypt
 ```
 
 ---
@@ -66,22 +74,23 @@ cargo build --release   # binary at target/release/krpano-decrypt
 
 ```sh
 # Decrypt an encrypted tour.xml using its tour.js when needed
-krpano-decrypt decrypt tour.xml tour.js -o tour.decrypted.xml
+cargo run --example krpano-decrypt -- decrypt tour.xml tour.js -o tour.decrypted.xml
 
-# Some public ClassicB / ClassicZ payloads can be decrypted without JS
-krpano-decrypt decrypt tour.xml -o tour.decrypted.xml
+# Some public ClassicB / ClassicZ / Subdiv payloads can be decrypted without JS
+cargo run --example krpano-decrypt -- decrypt tour.xml -o tour.decrypted.xml
 
 # Decode just the packed/obfuscated viewer engine from tour.js
-krpano-decrypt decode-viewer tour.js -o decoded.js
+cargo run --example krpano-decrypt -- decode-viewer tour.js -o decoded.js
 
 # Print the krp:/ptp: wrapper key embedded in tour.js
-krpano-decrypt wrapper-key tour.js
+cargo run --example krpano-decrypt -- wrapper-key tour.js
 
 # Inspect an encrypted payload (header, cipher, mode, engine family) without decrypting
-krpano-decrypt inspect tour.xml tour.js
+cargo run --example krpano-decrypt -- inspect tour.xml tour.js
 ```
 
-Run `krpano-decrypt --help` for full options. `-v` / `-vv` enable info/debug logs.
+Run `cargo run --example krpano-decrypt -- --help` for full options. `-v` /
+`-vv` enable info/debug logs.
 
 ---
 

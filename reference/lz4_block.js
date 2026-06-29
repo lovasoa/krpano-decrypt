@@ -1,6 +1,6 @@
 // Deobfuscated: krpano LZ4 block decompression (krpano-specific framing, not
 // the standard LZ4 frame format). See PLAN.md §3.1.
-// Rust port: crates/krpano-decrypt/src/codecs.rs (`lz4_decompress_block`).
+// Rust port: src/codecs.rs (`lz4_decompress_block`).
 //
 // The packed viewer JS and the ClassicZ body both wrap an LZ4 block in an
 // 8-byte header:

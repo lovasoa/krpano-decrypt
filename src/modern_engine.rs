@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use base64::{Engine as _, engine::general_purpose};
 
 use crate::error::{KrpanoDecryptError, ModernWrapperKeyError};
-use crate::old_engine::{EngineContext, KeyDerivation};
 
 pub(crate) const SUBDIV_REPLACEMENT_TOKEN: &str = "z";
 
@@ -38,18 +37,6 @@ pub struct ModernEngineContext {
     pub side: Vec<u16>,
     /// All unpacked rows, used for row-indexed key lookups.
     pub rows: Vec<Vec<u16>>,
-}
-
-impl EngineContext for ModernEngineContext {
-    fn default_key(&self) -> &[u8] {
-        self.default_key.as_bytes()
-    }
-
-    fn protected_key(&self) -> Option<&[u8]> {
-        // Modern engines don't carry a license blob; the `Protected` Subdiv
-        // path reads the protection key from `pk=` in the side data instead.
-        None
-    }
 }
 
 /// The `Ma` browser-name array shared by every modern krpano engine.
@@ -125,30 +112,6 @@ pub(crate) fn public_subdiv_context() -> ModernEngineContext {
     }
 }
 
-// ---------------------------------------------------------------------------
-// KeyDerivation impl
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-pub struct ModernEngine;
-
-impl KeyDerivation for ModernEngine {
-    type Ctx = ModernEngineContext;
-
-    fn matches(&self, decoded_engine: &str) -> bool {
-        !decoded_engine.contains("KENC") && decoded_engine.contains("we.subdiv")
-    }
-
-    fn derive(
-        &self,
-        decoded_engine: &[u8],
-        wrapper_key: &str,
-    ) -> Result<Self::Ctx, KrpanoDecryptError> {
-        extract_modern_context(decoded_engine, wrapper_key)
-    }
-}
-
-// The `Ma` browser-name array shared by every modern krpano engine.
 // =========================================================================
 // Startup-IIFE location
 // =========================================================================
@@ -1102,7 +1065,7 @@ mod tests {
 
     fn load_fixture(fixture: &str) -> Option<(Vec<u8>, String)> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/encrypted")
+            .join("testdata/encrypted")
             .join(fixture);
         let js = ["tour.js", "krpano.js"]
             .iter()
@@ -1131,25 +1094,6 @@ mod tests {
             let ctx =
                 extract_modern_context(&decoded, &key).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(ctx.default_key, "actions overflow", "{name}");
-        }
-    }
-
-    #[test]
-    fn static_probe_extracts_replacement_token() {
-        for name in [
-            "2018-04-04",
-            "2023-02-07",
-            "2023-04-30",
-            "2023-04-30-PP",
-            "2023-12-11",
-            "2024-12-20",
-            "2026-06-25-pp-01_minimal",
-            "2026-06-25-rr_minimal",
-        ] {
-            let (decoded, key) = load_fixture(name).expect(name);
-            let ctx =
-                extract_modern_context(&decoded, &key).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(ctx.replacement_token, "z", "{name}");
         }
     }
 
@@ -1201,8 +1145,7 @@ mod tests {
 
     #[test]
     fn subdiv_branch5_decrypts_2023_rr_fixture() {
-        let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted/2023-04-30");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted/2023-04-30");
         let xml = fs::read(root.join("tour.xml")).unwrap();
         let payload = viewer::encrypted_payload(&xml).unwrap();
         let header = crate::header::KencHeader::parse(&payload).unwrap();
@@ -1217,8 +1160,7 @@ mod tests {
 
     #[test]
     fn subdiv_branch5_decrypts_2023_pp_fixture() {
-        let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted/2023-04-30-PP");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/encrypted/2023-04-30-PP");
         let xml = fs::read(root.join("tour.xml")).unwrap();
         let payload = viewer::encrypted_payload(&xml).unwrap();
         let header = crate::header::KencHeader::parse(&payload).unwrap();
@@ -1231,178 +1173,16 @@ mod tests {
         assert!(plaintext.trim_start().starts_with("<krpano"));
     }
 
-    #[test]
-    #[ignore]
-    fn analysis_prints_krpano_124_context_clues() {
-        for name in ["2026-06-25-pp-01_minimal", "2026-06-25-rr_minimal"] {
-            let (decoded, key) = load_fixture(name).expect(name);
-            let text = std::str::from_utf8(&decoded).expect(name);
-            eprintln!("{name}: decoded={} wrapper={}", decoded.len(), key.len());
-            for needle in [
-                "KENC",
-                "actions overflow",
-                "decodeLicense",
-                "decryptData",
-                "subdiv",
-                "loadpano",
-                "embedhtml5",
-                "String.fromCharCode",
-                "replaceAll",
-                ".replace",
-            ] {
-                match text.find(needle) {
-                    Some(idx) => {
-                        let start = idx.saturating_sub(120);
-                        let end = (idx + needle.len() + 240).min(text.len());
-                        eprintln!("{name}: {needle:?} at {idx}: {}", &text[start..end]);
-                    }
-                    None => eprintln!("{name}: {needle:?} not found"),
-                }
-            }
-            match extract_modern_context(&decoded, &key) {
-                Ok(ctx) => eprintln!("{name}: context={ctx:?}"),
-                Err(err) => eprintln!("{name}: context error={err}"),
-            }
-            if let Ok(startup) = find_startup_iife(text, &key) {
-                let (rows, _side) =
-                    unpack_krp_payload(&key, &startup.body, startup.constant).unwrap();
-                eprintln!("{name}: rows={}", rows.len());
-                for (idx, row) in rows.iter().enumerate() {
-                    let value: String = row
-                        .iter()
-                        .map(|&c| char::from_u32(u32::from(c)).unwrap_or('?'))
-                        .collect();
-                    if value == "KENC"
-                        || value == "z"
-                        || value == "\\"
-                        || value.contains("actions")
-                        || value.contains("encrypt")
-                        || value.contains("xml")
-                    {
-                        eprintln!("{name}: row[{idx}]={value:?}");
-                    }
-                }
-                for row in [82usize, 87, 89, 114, 119] {
-                    for id in possible_direct_row_ids(row) {
-                        let needle = format!("_({id}");
-                        if let Some(idx) = text.find(&needle) {
-                            let start = idx.saturating_sub(300);
-                            let end = (idx + 2600).min(text.len());
-                            eprintln!(
-                                "{name}: row {row} call {needle:?} at {idx}: {}",
-                                &text[start..end]
-                            );
-                        }
-                    }
-                }
-                for needle in [
-                    "37==",
-                    "42==",
-                    "charCodeAt(0)",
-                    "charCodeAt(1)",
-                    "slice(2",
-                    "indexOf(\"@\"",
-                    "indexOf('@'",
-                ] {
-                    print_first_matches(name, text, needle, 4);
-                }
-            }
-        }
-    }
-
-    fn possible_direct_row_ids(row: usize) -> Vec<usize> {
-        let mut ids = Vec::new();
-        for branch in 0..16usize {
-            ids.push((branch << 11) | (row << 2));
-            ids.push(1 | (row << 7) | (branch << 2));
-        }
-        ids
-    }
-
-    fn print_first_matches(name: &str, text: &str, needle: &str, limit: usize) {
-        let mut search_from = 0;
-        let mut found = 0;
-        while found < limit {
-            let Some(rel) = text[search_from..].find(needle) else {
-                break;
-            };
-            let idx = search_from + rel;
-            let start = idx.saturating_sub(180);
-            let end = (idx + needle.len() + 360).min(text.len());
-            eprintln!("{name}: {needle:?} at {idx}: {}", &text[start..end]);
-            search_from = idx + needle.len();
-            found += 1;
-        }
-    }
-
     // ---- JSON cross-check path ----
 
     fn load_rows_json(fixture: &str) -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/encrypted")
+            .join("testdata/encrypted")
             .join(fixture)
             .join("rows.json");
         fs::read_to_string(&path).unwrap_or_else(|e| panic!("{fixture}: {e}"))
     }
 
-    #[test]
-    #[ignore]
-    fn try_all_rows_as_rr_keys_for_2023_04_30() {
-        // Try every row value from the 2023-04-30 rows.json as a potential RR key
-        let json = load_rows_json("2023-04-30");
-        let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/encrypted/2023-04-30");
-        let xml = fs::read(root.join("tour.xml")).unwrap();
-        let payload = viewer::encrypted_payload(&xml).unwrap();
-        let header = crate::header::KencHeader::parse(&payload).unwrap();
-        let body = header.payload(&payload);
-
-        let rows_json: RowsJson = serde_json::from_str(&json).unwrap();
-        for (row_id, hex) in &rows_json.rows {
-            let bytes: Vec<u8> = (0..hex.len())
-                .step_by(2)
-                .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-                .collect();
-            if bytes.is_empty() || bytes.len() > 64 {
-                continue;
-            }
-            if let Ok(s) = String::from_utf8(bytes.clone())
-                && (s == "actions overflow" || s == "z" || s == "KENC")
-            {
-                continue; // skip known non-key values
-            }
-            if let Ok(plaintext) =
-                crate::branches::decrypt_subdiv_via_classic_pipeline(body, &bytes)
-            {
-                eprintln!(
-                    "KEY FOUND: row {row_id} key={:?} plaintext={:.80}",
-                    bytes, plaintext
-                );
-            }
-        }
-        eprintln!("done");
-    }
-    #[test]
-    fn dump_engine_source() {
-        for name in ["2026-06-25-pp-01_minimal", "2026-06-25-rr_minimal"] {
-            let (decoded, _key) = load_fixture(name).expect(name);
-            let text = std::str::from_utf8(&decoded).expect(name);
-            let out_path = std::env::temp_dir().join(format!("{name}_engine.js"));
-            std::fs::write(&out_path, text).unwrap();
-            eprintln!("Wrote {} bytes to {}", text.len(), out_path.display());
-            // Also find and print decryptData region
-            if let Some(idx) = text.find("decryptData") {
-                let start = idx.saturating_sub(200);
-                let end = (idx + 3000).min(text.len());
-                eprintln!("{name}: decryptData region:\n{}", &text[start..end]);
-            }
-            if let Some(idx) = text.find("decodeLicense") {
-                let start = idx.saturating_sub(200);
-                let end = (idx + 3000).min(text.len());
-                eprintln!("{name}: decodeLicense region:\n{}", &text[start..end]);
-            }
-        }
-    }
     #[test]
     fn json_and_static_probe_agree_on_rows() {
         for name in [

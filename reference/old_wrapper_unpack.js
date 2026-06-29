@@ -1,5 +1,5 @@
 // Deobfuscated: old-engine wrapper (`krp:`) unpack. See PLAN.md §3.3.
-// Rust port: crates/krpano-decrypt/src/old_engine.rs (`unpack_old_wrapper`).
+// Rust port: src/old_engine.rs (`unpack_old_wrapper`).
 //
 // The `krp:` wrapper string is an obfuscated payload. A reverse-substitution
 // cipher with a per-fixture salt (byte 4) and a rolling checksum unpacks it

@@ -110,7 +110,7 @@ activity. Use it for behavior that only manifests with a full DOM/WebGL (e.g.
 ## Smoke tests
 
 ```sh
-node tools_test.mjs
+npm test --prefix tools
 ```
 
 Runs the tools against the checked-in fixtures and asserts they produce sane

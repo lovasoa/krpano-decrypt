@@ -1,5 +1,5 @@
 // Deobfuscated: modern-engine wrapper (`krp:`) unpack. See PLAN.md §3.4.
-// Rust port: crates/krpano-decrypt/src/modern_engine.rs
+// Rust port: src/modern_engine.rs
 //   (`find_startup_iife`, `compute_checksum`, `build_lf_shuffle`, `unpack_krp_payload`).
 //
 // Modern engines (2018+) do not store keys in source text. A startup IIFE

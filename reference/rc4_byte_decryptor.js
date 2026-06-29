@@ -1,6 +1,6 @@
 // Deobfuscated: krpano RC4-like byte decryptor (shared by ClassicZ & ClassicB).
 // Source: extracted from krpano viewer engines (2013–2024). See PLAN.md §4.1.
-// Rust port: crates/krpano-decrypt/src/crypto.rs (`decrypt_bytes`).
+// Rust port: src/crypto.rs (`decrypt_bytes`).
 //
 // Four phases:
 //   1. Key mixing    — first 128 ciphertext bytes interleave with key bytes

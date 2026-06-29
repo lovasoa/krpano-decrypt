@@ -1,8 +1,8 @@
 // Deobfuscated: we.subdiv branch-5 decompressor (Subdiv cipher). See PLAN.md §4.4.
-// Rust port: crates/krpano-decrypt/src/modern_engine.rs
+// Rust port: src/modern_engine.rs
 //   (`subdiv_branch5_decode`, `build_mf_table`, `krpano_utf8_decode`).
 //
-// The Subdiv cipher replaces the configured token ("z") with "\" (0x5C), then
+// The Subdiv cipher replaces the fixed escape marker ("z") with "\" (0x5C), then
 // sends the body to we.subdiv branch 5. The first two bytes select the path:
 //   f = body[0] - g   where  g = row["krpano"][5] / 3   (g = 37 in all fixtures)
 //     f =  0  -> Public                  (no key mixing)

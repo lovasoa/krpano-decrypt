@@ -21,8 +21,8 @@
 //! std::fs::write("tour.decrypted.xml", plaintext).unwrap();
 //! ```
 //!
-//! For public ClassicB / ClassicZ payloads whose stable constants are known,
-//! `viewer_data` may be `None`. Other payload variants return a structured
+//! For public ClassicB, ClassicZ, and Subdiv payloads whose stable constants
+//! are known, `viewer_data` may be `None`. Other payload variants return a structured
 //! [`KrpanoDecryptError::ViewerJsRequired`] error.
 //!
 //! ## Format documentation
@@ -41,26 +41,18 @@
 //!   minified identifiers, so it generalises across engine builds.
 //! - **Deterministic.** Decryption is a pure function of the two input files.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-#[allow(missing_docs)]
-pub mod branches;
-#[allow(missing_docs)]
-pub mod codecs;
-#[allow(missing_docs)]
-pub mod crypto;
-#[allow(missing_docs)]
-pub mod engine;
+mod branches;
+mod codecs;
+mod crypto;
+mod engine;
 pub mod error;
-#[allow(missing_docs)]
-pub mod header;
-#[allow(missing_docs)]
-pub mod modern_engine;
-#[allow(missing_docs)]
-pub mod old_engine;
-#[allow(missing_docs)]
-pub mod viewer;
+mod header;
+mod modern_engine;
+mod old_engine;
+mod viewer;
 
 pub use engine::{EngineFamily, decrypt_xml, detect_engine};
 pub use error::KrpanoDecryptError;

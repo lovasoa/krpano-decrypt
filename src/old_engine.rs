@@ -23,85 +23,12 @@ use base64::Engine;
 
 use crate::error::KrpanoDecryptError;
 
-// ---------------------------------------------------------------------------
-// Engine trait
-// ---------------------------------------------------------------------------
-
-/// Context produced by key derivation for a given engine family.
-///
-/// Both old and modern engines produce a context that the branch transform
-/// reads to obtain the decryption key and any auxiliary data (Base64
-/// alphabet for ClassicB, replacement token for Subdiv, etc.).
-#[allow(dead_code)]
-pub trait EngineContext: Clone + std::fmt::Debug {
-    /// The default (non-license) key used when the header's cipher mode is
-    /// `Public`.
-    fn default_key(&self) -> &[u8];
-
-    /// The license-derived key used when the cipher mode is `Protected`,
-    /// or `None` if the engine does not carry a license.
-    fn protected_key(&self) -> Option<&[u8]>;
-}
-
-/// Key derivation for an engine family.
-#[allow(dead_code)]
-pub trait KeyDerivation {
-    type Ctx: EngineContext;
-
-    /// Detect whether this engine family matches the decoded engine JS.
-    fn matches(&self, decoded_engine: &str) -> bool;
-
-    /// Derive the engine context from the decoded engine and wrapper key.
-    fn derive(
-        &self,
-        decoded_engine: &[u8],
-        wrapper_key: &str,
-    ) -> Result<Self::Ctx, KrpanoDecryptError>;
-}
-
-// ---------------------------------------------------------------------------
-// Old engine context
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OldEngineContext {
     pub default_key: Vec<u8>,
     pub protected_key: Option<Vec<u8>>,
     pub base64_alphabet: String,
     pub key_variable: String,
-}
-
-impl EngineContext for OldEngineContext {
-    fn default_key(&self) -> &[u8] {
-        &self.default_key
-    }
-
-    fn protected_key(&self) -> Option<&[u8]> {
-        self.protected_key.as_deref()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Old engine key derivation
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-pub struct OldEngine;
-
-impl KeyDerivation for OldEngine {
-    type Ctx = OldEngineContext;
-
-    fn matches(&self, decoded_engine: &str) -> bool {
-        decoded_engine.contains("KENC")
-    }
-
-    fn derive(
-        &self,
-        decoded_engine: &[u8],
-        wrapper_key: &str,
-    ) -> Result<Self::Ctx, KrpanoDecryptError> {
-        derive_old_license_key(decoded_engine, wrapper_key)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1105,7 +1032,7 @@ mod tests {
 
     fn load_fixture(fixture: &str) -> (Vec<u8>, String) {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/encrypted")
+            .join("testdata/encrypted")
             .join(fixture);
         let js_path = ["tour.js", "krpano.js"]
             .iter()
